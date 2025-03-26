@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from typing import List, Dict, Any
 import pandas as pd
 
@@ -15,6 +16,10 @@ from quant_system.features.technical import TechnicalFeatures
 from quant_system.analysis.market_structure import MarketStructureAnalyzer
 from quant_system.analysis.backtest import MarketBacktester
 from quant_system.analysis.llm_interface import LLMAnalyzer
+from quant_system.utils import get_logger, ErrorHandler, set_log_level, DEBUG, INFO
+
+# Initialize logger for this module
+logger = get_logger("interface.cli")
 
 def pretty_print_json(data):
     """Print JSON data in a human-readable format"""
@@ -24,80 +29,108 @@ class QuantSystemCLI:
     """Command-line interface for the Quant System"""
     
     def __init__(self):
-        self.data_connector = CryptoDataConnector()
-        self.technical_features = TechnicalFeatures()
-        self.market_analyzer = MarketStructureAnalyzer()
-        self.backtester = MarketBacktester()
-        self.llm = LLMAnalyzer(api_key=os.environ.get("LLM_API_KEY"))
+        logger.debug("Initializing CLI interface")
+        try:
+            self.data_connector = CryptoDataConnector()
+            self.technical_features = TechnicalFeatures()
+            self.market_analyzer = MarketStructureAnalyzer()
+            self.backtester = MarketBacktester()
+            self.llm = LLMAnalyzer(api_key=os.environ.get("LLM_API_KEY"))
+            logger.debug("CLI system components initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize CLI system components: {e}")
+            logger.debug(traceback.format_exc())
+            raise
     
     def analyze(self, symbol: str, timeframe: str, days: int):
         """Run a complete market analysis"""
         print(f"Analyzing {symbol} on {timeframe} timeframe using {days} days of data...\n")
+        logger.info(f"Starting analysis of {symbol} on {timeframe} timeframe ({days} days)")
         
-        # 1. Fetch data
-        market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+        with ErrorHandler(context=f"market analysis for {symbol}") as handler:
+            # 1. Fetch data
+            logger.debug(f"Fetching market data for {symbol}")
+            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch market data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            logger.info(f"Retrieved {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}")
+            print(f"Data retrieved: {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}\n")
+            
+            # 2. Generate technical features
+            logger.debug(f"Generating technical indicators for {symbol}")
+            df_indicators = self.technical_features.add_indicators(market_data)
+            
+            # 3. Identify current market conditions
+            logger.debug(f"Identifying market conditions for {symbol}")
+            conditions = self.market_analyzer.identify_conditions(df_indicators)
+            logger.info(f"Identified conditions for {symbol}: {', '.join(conditions)}")
+            
+            print("Current Market Conditions:")
+            for i, condition in enumerate(conditions, 1):
+                print(f"  {i}. {condition}")
+            print()
+            
+            # 4. Find similar historical conditions and analyze performance
+            logger.debug(f"Finding similar historical conditions for {symbol}")
+            similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
+            
+            if not similar_dates:
+                logger.info(f"No similar historical conditions found for {symbol}")
+                print("No similar historical conditions found in the specified period.")
+                return 0
+            
+            logger.info(f"Found {len(similar_dates)} similar historical instances for {symbol}")
+            print(f"Found {len(similar_dates)} similar historical instances")
+            print("Recent examples:")
+            for date, matched_conditions in similar_dates[-3:]:
+                print(f"  {date.date()}: {', '.join(matched_conditions)}")
+            print()
+            
+            # 5. Calculate forward returns from similar conditions
+            logger.debug(f"Calculating forward returns for {symbol}")
+            results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
+            
+            print("Historical Forward Returns (after similar conditions):")
+            for period, value in stats.items():
+                if 'mean' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day forward return (avg): {value:.2f}%")
+                    print(f"  {days}-day forward return (avg): {value:.2f}%")
+                if 'positive_pct' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day win rate: {value:.2f}%")
+                    print(f"  {days}-day win rate: {value:.2f}%")
+            print()
+            
+            # 6. Generate market summary with LLM
+            if os.environ.get("LLM_API_KEY"):
+                logger.debug(f"Generating LLM market analysis for {symbol}")
+                print("Generating market analysis with LLM...")
+                summary = self.llm.generate_market_summary(df_indicators, conditions, stats)
+                logger.info(f"LLM analysis generated for {symbol}")
+                print("\nLLM Analysis:")
+                print(summary)
+            else:
+                logger.warning("LLM analysis skipped (no API key provided)")
+                print("\nLLM Analysis skipped (no API key provided)")
         
-        if market_data.empty:
-            print("Error: Could not fetch market data")
-            return 1
-        
-        print(f"Data retrieved: {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}\n")
-        
-        # 2. Generate technical features
-        df_indicators = self.technical_features.add_indicators(market_data)
-        
-        # 3. Identify current market conditions
-        conditions = self.market_analyzer.identify_conditions(df_indicators)
-        
-        print("Current Market Conditions:")
-        for i, condition in enumerate(conditions, 1):
-            print(f"  {i}. {condition}")
-        print()
-        
-        # 4. Find similar historical conditions and analyze performance
-        similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
-        
-        if not similar_dates:
-            print("No similar historical conditions found in the specified period.")
-            return 0
-        
-        print(f"Found {len(similar_dates)} similar historical instances")
-        print("Recent examples:")
-        for date, matched_conditions in similar_dates[-3:]:
-            print(f"  {date.date()}: {', '.join(matched_conditions)}")
-        print()
-        
-        # 5. Calculate forward returns from similar conditions
-        results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
-        
-        print("Historical Forward Returns (after similar conditions):")
-        for period, value in stats.items():
-            if 'mean' in period:
-                days = period.split('d_')[0]
-                print(f"  {days}-day forward return (avg): {value:.2f}%")
-            if 'positive_pct' in period:
-                days = period.split('d_')[0]
-                print(f"  {days}-day win rate: {value:.2f}%")
-        print()
-        
-        # 6. Generate market summary with LLM
-        if os.environ.get("LLM_API_KEY"):
-            print("Generating market analysis with LLM...")
-            summary = self.llm.generate_market_summary(df_indicators, conditions, stats)
-            print("\nLLM Analysis:")
-            print(summary)
-        else:
-            print("\nLLM Analysis skipped (no API key provided)")
-        
+        logger.info(f"Analysis of {symbol} completed successfully")
         return 0
     
     def list_symbols(self):
         """List available trading pairs"""
-        try:
+        logger.info("Listing available trading symbols")
+        with ErrorHandler(context="fetching symbol list") as handler:
             exchange = self.data_connector.exchange
             markets = exchange.load_markets()
             symbols = list(markets.keys())
             
+            logger.info(f"Retrieved {len(symbols)} symbols from {exchange.name}")
             print(f"Available symbols on {exchange.name}:")
             
             # Group by base currency
@@ -115,6 +148,7 @@ class QuantSystemCLI:
             for currency in major_currencies:
                 if currency in by_base:
                     pairs = by_base[currency]
+                    logger.debug(f"Displaying {currency} pairs ({len(pairs)} total)")
                     print(f"  {currency}: {', '.join(pairs[:5])}{'...' if len(pairs) > 5 else ''}")
                     del by_base[currency]
             
@@ -123,117 +157,165 @@ class QuantSystemCLI:
                 print(f"  {currency}: {', '.join(pairs[:5])}{'...' if len(pairs) > 5 else ''}")
             
             if len(by_base) > 10:
+                logger.debug(f"Omitted {len(by_base) - 10} base currencies from display")
                 print(f"  ... and {len(by_base) - 10} more base currencies")
-                
+            
+            logger.info("Symbol list displayed successfully")
             return 0
-        except Exception as e:
-            print(f"Error listing symbols: {str(e)}")
-            return 1
     
     def list_timeframes(self):
         """List available timeframes"""
-        try:
+        logger.info("Listing available timeframes")
+        with ErrorHandler(context="fetching timeframes") as handler:
             exchange = self.data_connector.exchange
             timeframes = exchange.timeframes
             
+            logger.info(f"Retrieved {len(timeframes)} timeframes from {exchange.name}")
             print(f"Available timeframes on {exchange.name}:")
             for tf, description in timeframes.items():
                 print(f"  {tf}: {description}")
             
+            logger.info("Timeframes displayed successfully")
             return 0
-        except Exception as e:
-            print(f"Error listing timeframes: {str(e)}")
-            return 1
     
     def backtest(self, conditions: List[str], symbol: str, timeframe: str, days: int):
         """Backtest specific market conditions"""
-        print(f"Backtesting conditions: {', '.join(conditions)}")
+        condition_str = ", ".join(conditions)
+        print(f"Backtesting conditions: {condition_str}")
         print(f"Symbol: {symbol}, Timeframe: {timeframe}, Data period: {days} days\n")
         
-        # 1. Fetch data
-        market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+        logger.info(f"Starting backtest for conditions [{condition_str}] on {symbol} ({timeframe}, {days} days)")
         
-        if market_data.empty:
-            print("Error: Could not fetch market data")
-            return 1
-        
-        # 2. Generate technical features
-        df_indicators = self.technical_features.add_indicators(market_data)
-        
-        # 3. Find similar dates
-        similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
-        
-        if not similar_dates:
-            print("No instances of these conditions found in the historical data.")
+        with ErrorHandler(context=f"backtesting {condition_str} on {symbol}") as handler:
+            # 1. Fetch data
+            logger.debug(f"Fetching {days} days of data for {symbol}")
+            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch market data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            logger.info(f"Retrieved {len(market_data)} candles for {symbol}")
+            
+            # 2. Generate technical features
+            logger.debug(f"Generating technical indicators for {symbol}")
+            df_indicators = self.technical_features.add_indicators(market_data)
+            
+            # 3. Find similar dates
+            logger.debug(f"Finding instances of conditions: {condition_str}")
+            similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
+            
+            if not similar_dates:
+                logger.info(f"No instances of conditions [{condition_str}] found in historical data")
+                print("No instances of these conditions found in the historical data.")
+                return 0
+            
+            logger.info(f"Found {len(similar_dates)} instances of conditions [{condition_str}]")
+            print(f"Found {len(similar_dates)} instances of specified conditions")
+            
+            # 4. Calculate forward returns
+            logger.debug(f"Calculating returns for {len(similar_dates)} similar instances")
+            results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
+            
+            print("\nHistorical Forward Returns:")
+            for period, value in stats.items():
+                if 'mean' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day forward return (avg): {value:.2f}%")
+                    print(f"  {days}-day forward return (avg): {value:.2f}%")
+                if 'positive_pct' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day win rate: {value:.2f}%")
+                    print(f"  {days}-day win rate: {value:.2f}%")
+            
+            if not results_df.empty:
+                logger.debug("Displaying most recent occurrences")
+                print("\nMost Recent Occurrences:")
+                recent = results_df.sort_values('date', ascending=False).head(5)
+                for _, row in recent.iterrows():
+                    date = row['date'].date()
+                    conditions_str = ', '.join(row['conditions'])
+                    returns = [f"{days}d: {row[f'{days}d_return']:.2f}%" 
+                               for days in [1, 5, 10, 20] 
+                               if f"{days}d_return" in row and not pd.isna(row[f"{days}d_return"])]
+                    
+                    print(f"  {date} - {conditions_str}")
+                    print(f"    Returns: {', '.join(returns)}")
+            
+            logger.info(f"Backtest for conditions [{condition_str}] completed successfully")
             return 0
-        
-        print(f"Found {len(similar_dates)} instances of specified conditions")
-        
-        # 4. Calculate forward returns
-        results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
-        
-        print("\nHistorical Forward Returns:")
-        for period, value in stats.items():
-            if 'mean' in period:
-                days = period.split('d_')[0]
-                print(f"  {days}-day forward return (avg): {value:.2f}%")
-            if 'positive_pct' in period:
-                days = period.split('d_')[0]
-                print(f"  {days}-day win rate: {value:.2f}%")
-        
-        if not results_df.empty:
-            print("\nMost Recent Occurrences:")
-            recent = results_df.sort_values('date', ascending=False).head(5)
-            for _, row in recent.iterrows():
-                date = row['date'].date()
-                conditions_str = ', '.join(row['conditions'])
-                returns = [f"{days}d: {row[f'{days}d_return']:.2f}%" 
-                           for days in [1, 5, 10, 20] 
-                           if f"{days}d_return" in row and not pd.isna(row[f"{days}d_return"])]
-                
-                print(f"  {date} - {conditions_str}")
-                print(f"    Returns: {', '.join(returns)}")
-        
-        return 0
 
 def main():
     """Main entry point for the CLI"""
-    parser = argparse.ArgumentParser(description="Quant System Command Line Interface")
-    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+    parser = argparse.ArgumentParser(description="Quant System CLI")
+    
+    # Add global debug flag that applies to all commands
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
     # Analyze command
-    analyze_parser = subparsers.add_parser("analyze", help="Run complete market analysis")
-    analyze_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair symbol")
-    analyze_parser.add_argument("--timeframe", "-t", default="1d", help="Timeframe (e.g., 1m, 1h, 1d)")
+    analyze_parser = subparsers.add_parser("analyze", help="Analyze a market")
+    analyze_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
+    analyze_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
     analyze_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
     
     # List symbols command
-    subparsers.add_parser("list-symbols", help="List available trading pairs")
+    list_symbols_parser = subparsers.add_parser("symbols", help="List available trading pairs")
     
     # List timeframes command
-    subparsers.add_parser("list-timeframes", help="List available timeframes")
+    list_timeframes_parser = subparsers.add_parser("timeframes", help="List available timeframes")
     
     # Backtest command
-    backtest_parser = subparsers.add_parser("backtest", help="Backtest specific market conditions")
-    backtest_parser.add_argument("conditions", nargs="+", help="Market conditions to backtest")
-    backtest_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair symbol")
-    backtest_parser.add_argument("--timeframe", "-t", default="1d", help="Timeframe (e.g., 1m, 1h, 1d)")
+    backtest_parser = subparsers.add_parser("backtest", help="Backtest market conditions")
+    backtest_parser.add_argument("--conditions", "-c", required=True, nargs="+", help="Market conditions to backtest")
+    backtest_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
+    backtest_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
     backtest_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
     
-    args = parser.parse_args()
-    cli = QuantSystemCLI()
-    
-    if args.command == "analyze":
-        return cli.analyze(args.symbol, args.timeframe, args.days)
-    elif args.command == "list-symbols":
-        return cli.list_symbols()
-    elif args.command == "list-timeframes":
-        return cli.list_timeframes()
-    elif args.command == "backtest":
-        return cli.backtest(args.conditions, args.symbol, args.timeframe, args.days)
-    else:
+    # Ensure we don't error on empty args
+    if len(sys.argv) <= 1:
         parser.print_help()
         return 0
+    
+    # Parse the arguments
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # If argument parsing fails, show help and exit with error code
+        parser.print_help()
+        return e.code
+    
+    # Set debug logging if requested
+    if args.debug:
+        set_log_level(DEBUG)
+        logger.debug("Debug logging enabled in CLI")
+    
+    logger.info(f"Starting CLI with command: {args.command or 'help'}")
+    
+    try:
+        cli = QuantSystemCLI()
+        
+        # Execute the command
+        if args.command == "analyze":
+            return cli.analyze(args.symbol, args.timeframe, args.days)
+        elif args.command == "symbols":
+            return cli.list_symbols()
+        elif args.command == "timeframes":
+            return cli.list_timeframes()
+        elif args.command == "backtest":
+            return cli.backtest(args.conditions, args.symbol, args.timeframe, args.days)
+        else:
+            logger.info("No command specified, showing help")
+            parser.print_help()
+            return 0
+    except Exception as e:
+        logger.critical(f"Unhandled exception in CLI: {str(e)}")
+        logger.debug(traceback.format_exc())
+        print(f"Error: {str(e)}")
+        return 1
 
 if __name__ == "__main__":
     sys.exit(main())

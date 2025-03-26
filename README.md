@@ -66,18 +66,21 @@ python -m interface.cli analyze --symbol BTC/USDT --timeframe 1d --days 365
 
 # Or using the entry point (if installed with -e)
 quant-system analyze --symbol BTC/USDT --timeframe 1d --days 365
+
+# Enable debug logging with the --debug flag
+quant-system analyze --symbol BTC/USDT --debug
 ```
 
 #### List available symbols
 
 ```bash
-python -m interface.cli list-symbols
+python -m interface.cli symbols
 ```
 
 #### Backtest specific market conditions
 
 ```bash
-python -m interface.cli backtest "RSI below 30" "MACD bullish crossover" --symbol ETH/USDT
+python -m interface.cli backtest --conditions "RSI below 30" "MACD bullish crossover" --symbol ETH/USDT
 ```
 
 ### API Server
@@ -86,13 +89,27 @@ Start the API server:
 
 ```bash
 # Using the main script
-python main.py --mode api
+python main.py api
+
+# With debug logging enabled
+python main.py api --debug
 
 # Or using the entry point (if installed with -e)
 quant-api
 ```
 
 The API documentation will be available at http://localhost:8000/docs
+
+## Logging System
+
+The Quant System includes a comprehensive logging system that helps with debugging and monitoring:
+
+- **Log Files**: All logs are saved in the `logs/` directory with timestamps
+- **Debug Logging**: Use the `--debug` flag for detailed logging output
+- **Error Tracebacks**: Errors are logged with full tracebacks for troubleshooting
+- **Hierarchical Loggers**: Different components of the system use specific loggers
+
+For more information, see [docs/logging.md](docs/logging.md).
 
 ## Basic Usage Examples
 
@@ -105,8 +122,8 @@ quant-system analyze --symbol BTC/USDT --timeframe 1d
 # Analyze Ethereum on a 4-hour timeframe over the last 90 days
 quant-system analyze --symbol ETH/USDT --timeframe 4h --days 90
 
-# Backtest oversold conditions for Solana
-quant-system backtest "Oversold (RSI below 30)" --symbol SOL/USDT --days 180
+# Backtest oversold conditions for Solana with debug logging
+quant-system backtest --conditions "Oversold (RSI below 30)" --symbol SOL/USDT --days 180 --debug
 ```
 
 ### API Examples
@@ -132,9 +149,10 @@ You can also use the interactive Swagger documentation at http://localhost:8000/
 
 ## Troubleshooting
 
-- **API connection issues**: Ensure you're using supported symbols and timeframes (use the list-symbols and list-timeframes commands to check)
+- **API connection issues**: Ensure you're using supported symbols and timeframes (use the `symbols` and `timeframes` commands to check)
 - **LLM integration errors**: Verify your API key and provider settings in the .env file
 - **Missing indicators**: Some indicators require sufficient historical data - try increasing the --days parameter
+- **Error diagnosis**: Check the log files in the `logs/` directory for detailed error information and tracebacks
 
 ## Support
 
