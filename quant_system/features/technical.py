@@ -13,11 +13,65 @@ logger = get_logger("features.technical")
 class TechnicalFeatures:
     """Generate technical indicators from price data"""
     
-    @staticmethod
-    def add_indicators(df, required_periods=None):
+    def __init__(self, cache=None):
+        """Initialize the technical features calculator
+        
+        Args:
+            cache: Optional DataCache instance for caching indicators
+        """
+        self.cache = cache
+        self.logger = get_logger("features.technical")
+    
+    def add_indicators(self, df, symbol, timeframe, required_periods=None):
         """Add common technical indicators to a dataframe
         
         Adapts the indicators based on available data length.
+        Uses caching if available.
+        
+        Args:
+            df: DataFrame with OHLCV data
+            symbol: Trading pair symbol (e.g., 'BTC/USD')
+            timeframe: Timeframe (e.g., '1d', '1h')
+            required_periods: Optional list of periods to ensure are calculated
+            
+        Returns:
+            DataFrame with technical indicators added
+        """
+        if df.empty:
+            self.logger.warning("Cannot add indicators: Empty dataframe")
+            return df
+        
+        # Try to get cached indicators first
+        if self.cache is not None:
+            cached_indicators = self.cache.get_cached_indicators(symbol, timeframe)
+            if cached_indicators is not None:
+                self.logger.info(f"Using cached indicators for {symbol} ({timeframe})")
+                # Ensure we have the latest data by updating the last candle
+                if not cached_indicators.empty and not df.empty:
+                    latest_cached = cached_indicators.index[-1]
+                    latest_price = df.index[-1]
+                    if latest_cached == latest_price:
+                        # Update the latest candle's indicators
+                        new_indicators = self._calculate_indicators(df.iloc[-1:], required_periods)
+                        cached_indicators.iloc[-1] = new_indicators.iloc[-1]
+                        self.cache.cache_indicators(symbol, timeframe, cached_indicators)
+                return cached_indicators
+        
+        # Calculate indicators if not cached or cache is stale
+        self.logger.info(f"Calculating indicators for {symbol} ({timeframe})")
+        df_indicators = self._calculate_indicators(df, required_periods)
+        
+        # Cache the results if we have a cache instance
+        if self.cache is not None:
+            self.cache.cache_indicators(symbol, timeframe, df_indicators)
+        
+        return df_indicators
+    
+    def _calculate_indicators(self, df, required_periods=None):
+        """Calculate technical indicators for a dataframe
+        
+        This is the internal method that does the actual calculation.
+        The public add_indicators method handles caching.
         
         Args:
             df: DataFrame with OHLCV data
@@ -27,11 +81,11 @@ class TechnicalFeatures:
             DataFrame with technical indicators added
         """
         if df.empty:
-            logger.warning("Cannot add indicators: Empty dataframe")
+            self.logger.warning("Cannot calculate indicators: Empty dataframe")
             return df
         
         data_length = len(df)
-        logger.info(f"Adding technical indicators to dataframe with {data_length} rows")
+        self.logger.info(f"Calculating technical indicators for dataframe with {data_length} rows")
         
         # Copy the dataframe to avoid modifying the original
         df_indicators = df.copy()
@@ -39,7 +93,7 @@ class TechnicalFeatures:
         # Log the date range
         start_date = df_indicators.index[0]
         end_date = df_indicators.index[-1]
-        logger.debug(f"Data range: {start_date.date()} to {end_date.date()}")
+        self.logger.debug(f"Data range: {start_date.date()} to {end_date.date()}")
         
         # Determine maximum reasonable periods based on data length
         # Rule of thumb: Don't use MA periods > data_length/2
@@ -47,12 +101,12 @@ class TechnicalFeatures:
         
         # If we have very limited data, adjust all periods proportionally
         if data_length < 50:
-            logger.warning(f"Limited data available ({data_length} rows), scaling indicator periods")
+            self.logger.warning(f"Limited data available ({data_length} rows), scaling indicator periods")
             scale_factor = data_length / 100  # Scale based on ideal 100+ data points
         else:
             scale_factor = 1.0
             
-        logger.debug(f"Using max MA period of {max_ma_period}, scale factor {scale_factor:.2f}")
+        self.logger.debug(f"Using max MA period of {max_ma_period}, scale factor {scale_factor:.2f}")
         
         # ---------- MOVING AVERAGES ----------
         
@@ -62,7 +116,7 @@ class TechnicalFeatures:
         
         for period in ma_periods:
             adjusted_period = max(2, int(period * scale_factor))
-            logger.debug(f"Calculating SMA with period {adjusted_period} (original: {period})")
+            self.logger.debug(f"Calculating SMA with period {adjusted_period} (original: {period})")
             
             df_indicators[f'sma_{period}'] = ta.trend.sma_indicator(
                 df_indicators['close'], 
@@ -73,7 +127,7 @@ class TechnicalFeatures:
         
         # RSI (default 14, min 2)
         rsi_period = max(2, int(14 * scale_factor))
-        logger.debug(f"Calculating RSI with period {rsi_period}")
+        self.logger.debug(f"Calculating RSI with period {rsi_period}")
         df_indicators['rsi_14'] = ta.momentum.rsi(df_indicators['close'], window=rsi_period)
         
         # MACD (default 12/26/9)
@@ -88,7 +142,7 @@ class TechnicalFeatures:
             slow_period = max(fast_period + 1, slow_period)
             signal_period = max(2, signal_period)
             
-            logger.debug(f"Calculating MACD with periods {fast_period}/{slow_period}/{signal_period}")
+            self.logger.debug(f"Calculating MACD with periods {fast_period}/{slow_period}/{signal_period}")
             
             macd = ta.trend.MACD(
                 df_indicators['close'], 
@@ -100,13 +154,13 @@ class TechnicalFeatures:
             df_indicators['macd_signal'] = macd.macd_signal()
             df_indicators['macd_histogram'] = macd.macd_diff()
         else:
-            logger.warning(f"Insufficient data for MACD calculation (need 30+, have {data_length})")
+            self.logger.warning(f"Insufficient data for MACD calculation (need 30+, have {data_length})")
         
         # ---------- VOLATILITY INDICATORS ----------
         
         # Bollinger Bands (default 20, min 2)
         bb_period = max(2, int(20 * scale_factor))
-        logger.debug(f"Calculating Bollinger Bands with period {bb_period}")
+        self.logger.debug(f"Calculating Bollinger Bands with period {bb_period}")
         
         bollinger = ta.volatility.BollingerBands(
             df_indicators['close'], 
@@ -120,7 +174,7 @@ class TechnicalFeatures:
         
         # ATR (default 14, min 2)
         atr_period = max(2, int(14 * scale_factor))
-        logger.debug(f"Calculating ATR with period {atr_period}")
+        self.logger.debug(f"Calculating ATR with period {atr_period}")
         
         df_indicators['atr_14'] = ta.volatility.average_true_range(
             df_indicators['high'], 
@@ -131,7 +185,7 @@ class TechnicalFeatures:
         
         # Volatility (std dev of returns)
         vol_period = max(2, int(20 * scale_factor))
-        logger.debug(f"Calculating volatility with period {vol_period}")
+        self.logger.debug(f"Calculating volatility with period {vol_period}")
         
         df_indicators['volatility_20'] = df_indicators['close'].pct_change().rolling(vol_period).std() * np.sqrt(252 / periodicity_factor(df))
         
@@ -145,7 +199,7 @@ class TechnicalFeatures:
                 
                 # Calculate z-score if we have enough data
                 if data_length >= period * 1.5:
-                    logger.debug(f"Calculating Z-score for {ma_col}")
+                    self.logger.debug(f"Calculating Z-score for {ma_col}")
                     std_period = max(5, int(period / 2))
                     df_indicators[z_col] = (df_indicators['close'] - df_indicators[ma_col]) / df_indicators['close'].rolling(std_period).std()
         
@@ -154,7 +208,7 @@ class TechnicalFeatures:
             stoch_period = max(5, int(14 * scale_factor))
             stoch_smooth = max(3, int(3 * scale_factor))
             
-            logger.debug(f"Calculating Stochastic Oscillator with periods {stoch_period}/{stoch_smooth}")
+            self.logger.debug(f"Calculating Stochastic Oscillator with periods {stoch_period}/{stoch_smooth}")
             
             stoch = ta.momentum.StochasticOscillator(
                 df_indicators['high'], 
@@ -171,7 +225,7 @@ class TechnicalFeatures:
         # ADX if we have enough data
         if data_length >= 28:
             adx_period = max(14, int(14 * scale_factor))
-            logger.debug(f"Calculating ADX with period {adx_period}")
+            self.logger.debug(f"Calculating ADX with period {adx_period}")
             
             adx = ta.trend.ADXIndicator(
                 df_indicators['high'], 
@@ -190,7 +244,7 @@ class TechnicalFeatures:
         
         # Calculate distance from recent highs/lows if we have enough data
         if data_length >= 20:
-            logger.debug("Calculating high/low metrics")
+            self.logger.debug("Calculating high/low metrics")
             df_indicators['dist_from_20d_high'] = df_indicators['close'] / df_indicators['high'].rolling(20).max() - 1
             df_indicators['dist_from_20d_low'] = df_indicators['close'] / df_indicators['low'].rolling(20).min() - 1
             
@@ -226,7 +280,7 @@ class TechnicalFeatures:
         
         # Log count of generated indicators
         num_indicators = len(df_indicators.columns) - len(df.columns)
-        logger.info(f"Added {num_indicators} technical indicators")
+        self.logger.info(f"Added {num_indicators} technical indicators")
         
         return df_indicators
 

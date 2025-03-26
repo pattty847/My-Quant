@@ -44,7 +44,6 @@ class QuantSystemCLI:
     
     def analyze(self, symbol: str, timeframe: str, days: int):
         """Run a complete market analysis"""
-        print(f"Analyzing {symbol} on {timeframe} timeframe using {days} days of data...\n")
         logger.info(f"Starting analysis of {symbol} on {timeframe} timeframe ({days} days)")
         
         with ErrorHandler(context=f"market analysis for {symbol}") as handler:
@@ -59,7 +58,6 @@ class QuantSystemCLI:
                 return 1
             
             logger.info(f"Retrieved {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}")
-            print(f"Data retrieved: {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}\n")
             
             # 2. Generate technical features
             logger.debug(f"Generating technical indicators for {symbol}")
@@ -246,6 +244,71 @@ class QuantSystemCLI:
             
             logger.info(f"Backtest for conditions [{condition_str}] completed successfully")
             return 0
+            
+    def fetch_history(self, symbol: str, timeframe: str, from_date: str, to_date: str = None, output: str = None):
+        """Fetch complete historical data using pagination
+        
+        Args:
+            symbol: Trading pair to fetch
+            timeframe: Timeframe to fetch
+            from_date: Start date in YYYY-MM-DD format
+            to_date: End date in YYYY-MM-DD format (defaults to current date)
+            output: Output file path for CSV export
+        """
+        print(f"Fetching complete historical data for {symbol}")
+        print(f"Timeframe: {timeframe}")
+        print(f"Period: {from_date} to {to_date or 'now'}\n")
+        
+        logger.info(f"Starting historical data fetch for {symbol} ({timeframe}) from {from_date} to {to_date or 'now'}")
+        
+        with ErrorHandler(context=f"fetching historical data for {symbol}") as handler:
+            # Add time component if not provided
+            if from_date and len(from_date) == 10:  # YYYY-MM-DD format
+                from_date = f"{from_date} 00:00:00"
+            if to_date and len(to_date) == 10:  # YYYY-MM-DD format
+                to_date = f"{to_date} 23:59:59"
+                
+            # Fetch data with pagination
+            market_data = self.data_connector.fetch_paginated_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                from_datetime=from_date,
+                to_datetime=to_date
+            )
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch historical data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            # Print data statistics
+            print(f"Successfully retrieved {len(market_data)} candles")
+            print(f"Time range: {market_data.index[0]} to {market_data.index[-1]}")
+            
+            # Print sample of the data
+            print("\nData Sample (latest 5 candles):")
+            pd.set_option('display.precision', 2)
+            print(market_data.tail(5).to_string())
+            
+            # Save to CSV if requested
+            if output:
+                try:
+                    # Create directory if it doesn't exist
+                    output_dir = os.path.dirname(output)
+                    if output_dir:
+                        os.makedirs(output_dir, exist_ok=True)
+                    
+                    # Save to CSV
+                    market_data.to_csv(output)
+                    logger.info(f"Saved historical data to {output}")
+                    print(f"\nData successfully saved to {output}")
+                except Exception as e:
+                    logger.error(f"Failed to save data to {output}: {e}")
+                    print(f"Error saving data: {e}")
+            
+            logger.info(f"Historical data fetch completed successfully for {symbol} ({len(market_data)} records)")
+            return 0
 
 def main():
     """Main entry point for the CLI"""
@@ -274,6 +337,14 @@ def main():
     backtest_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
     backtest_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
     backtest_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
+    
+    # Fetch historical data command
+    history_parser = subparsers.add_parser("history", help="Fetch complete historical data")
+    history_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to fetch")
+    history_parser.add_argument("--timeframe", "-t", default="1d", help="Data timeframe")
+    history_parser.add_argument("--from", dest="from_date", required=True, help="Start date (YYYY-MM-DD)")
+    history_parser.add_argument("--to", dest="to_date", help="End date (YYYY-MM-DD), defaults to now")
+    history_parser.add_argument("--output", "-o", help="Output file path (CSV)")
     
     # Ensure we don't error on empty args
     if len(sys.argv) <= 1:
@@ -307,6 +378,8 @@ def main():
             return cli.list_timeframes()
         elif args.command == "backtest":
             return cli.backtest(args.conditions, args.symbol, args.timeframe, args.days)
+        elif args.command == "history":
+            return cli.fetch_history(args.symbol, args.timeframe, args.from_date, args.to_date, args.output)
         else:
             logger.info("No command specified, showing help")
             parser.print_help()

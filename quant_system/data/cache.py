@@ -156,6 +156,7 @@ class DataCache:
         """Update cached OHLCV data with new data
         
         Gets existing cached data, merges with new data, and saves the combined result.
+        Always updates the latest candle if it's from the current period.
         
         Args:
             symbol: Trading pair symbol (e.g., 'BTC/USD')
@@ -178,6 +179,19 @@ class DataCache:
             logger.debug(f"No existing data for {symbol} ({timeframe}), caching new data")
             self.cache_ohlcv(symbol, timeframe, new_df)
             return new_df
+        
+        # If we have both cached and new data, check if we need to update the latest candle
+        if not cached_df.empty and not new_df.empty:
+            latest_cached = cached_df.index[-1]
+            latest_new = new_df.index[-1]
+            
+            # If the latest candle is from the current period, update it
+            if latest_cached == latest_new:
+                logger.info(f"Updating latest candle for {symbol} ({timeframe}) from {latest_cached}")
+                # Replace the latest candle in cached data with the new one
+                cached_df.iloc[-1] = new_df.iloc[-1]
+                # Combine the rest of the new data
+                new_df = new_df.iloc[:-1]
         
         # Combine cached and new data
         combined_df = pd.concat([cached_df, new_df])
@@ -329,6 +343,69 @@ class DataCache:
         
         self._save_metadata()
         logger.info(f"Cleared {len(keys_to_remove)} cache entries")
+    
+    def get_custom_cache(self, cache_key: str) -> Optional[pd.DataFrame]:
+        """Retrieve data from custom cache key
+        
+        Args:
+            cache_key: Custom cache key
+            
+        Returns:
+            DataFrame with data or None if not cached
+        """
+        cache_path = self.cache_dir / f"custom_{cache_key.replace('/', '_')}.csv"
+        
+        if not cache_path.exists():
+            logger.debug(f"No data found for custom cache key: {cache_key}")
+            self.metadata["cache_stats"]["misses"] += 1
+            self._save_metadata()
+            return None
+        
+        try:
+            # Load cached data
+            df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+            logger.info(f"Loaded data for custom cache key {cache_key}: {len(df)} records")
+            self.metadata["cache_stats"]["hits"] += 1
+            self._save_metadata()
+            return df
+        except Exception as e:
+            logger.error(f"Failed to load data for custom cache key {cache_key}: {e}")
+            self.metadata["cache_stats"]["misses"] += 1
+            self._save_metadata()
+            return None
+    
+    def set_custom_cache(self, cache_key: str, df: pd.DataFrame) -> bool:
+        """Cache data with a custom key
+        
+        Args:
+            cache_key: Custom cache key
+            df: DataFrame to cache
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if df.empty:
+            logger.warning(f"Attempted to cache empty dataframe with key {cache_key}")
+            return False
+        
+        cache_path = self.cache_dir / f"custom_{cache_key.replace('/', '_')}.csv"
+        
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            
+            # Save dataframe to CSV
+            df.to_csv(cache_path)
+            
+            # Update metadata
+            self.metadata["last_updated"][f"custom_{cache_key}"] = datetime.now().isoformat()
+            self._save_metadata()
+            
+            logger.info(f"Cached {len(df)} records with custom key {cache_key}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cache data with custom key {cache_key}: {e}")
+            return False
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics

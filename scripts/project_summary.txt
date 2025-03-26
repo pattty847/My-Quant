@@ -1,0 +1,2686 @@
+--- .\main.py ---
+# main.py
+import os
+import sys
+import argparse
+import uvicorn
+from dotenv import load_dotenv
+from quant_system.utils import logger, set_log_level, DEBUG, INFO, ErrorHandler
+
+# Load environment variables from .env file
+logger.info("Loading environment variables from .env file")
+load_dotenv()
+
+def start_api(host="0.0.0.0", port=8000, reload=False):
+    """Start the FastAPI server"""
+    logger.info(f"Starting API server on {host}:{port} (reload={reload})")
+    try:
+        uvicorn.run("quant_system.interface.api:app", host=host, port=port, reload=reload)
+    except Exception as e:
+        logger.error(f"Failed to start API server: {e}")
+        raise
+
+def start_cli(debug=False):
+    """Start the command-line interface"""
+    logger.info("Starting CLI interface")
+    try:
+        from quant_system.interface.cli import main
+        
+        # If debug mode is enabled in the main script, ensure it's passed to CLI
+        if debug and '--debug' not in sys.argv:
+            sys.argv.append('--debug')
+            
+        main()
+    except Exception as e:
+        logger.error(f"Failed to start CLI interface: {e}")
+        raise
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Quant System")
+    subparsers = parser.add_subparsers(dest="mode", help="Run mode")
+    
+    # API mode
+    api_parser = subparsers.add_parser("api", help="Start the web API")
+    api_parser.add_argument("--host", default="0.0.0.0", help="API host")
+    api_parser.add_argument("--port", "-p", type=int, default=8000, help="API port")
+    api_parser.add_argument("--reload", "-r", action="store_true", help="Enable auto-reload")
+    
+    # CLI mode - forward all remaining arguments to the CLI
+    cli_parser = subparsers.add_parser("cli", help="Run command-line interface")
+    
+    # Add common arguments
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    
+    args, remaining = parser.parse_known_args()
+    
+    # Set logging level based on arguments
+    if hasattr(args, 'debug') and args.debug:
+        set_log_level(DEBUG)
+        logger.debug("Debug logging enabled")
+    
+    logger.info(f"Starting Quant System in {args.mode or 'help'} mode")
+    
+    with ErrorHandler(context="main execution", exit_on_error=True):
+        if args.mode == "api":
+            start_api(args.host, args.port, args.reload)
+        elif args.mode == "cli":
+            # Pass remaining arguments to CLI
+            sys.argv = [sys.argv[0]] + remaining
+            start_cli(debug=args.debug)
+        else:
+            logger.info("No mode specified, showing help")
+            parser.print_help()
+
+--- .\setup.py ---
+# setup.py
+from setuptools import setup, find_packages
+
+setup(
+    name="quant_system",
+    version="0.1.0",
+    description="Quantitative Trading System with LLM Integration",
+    author="Your Name",
+    packages=find_packages(),
+    install_requires=[
+        "pandas>=1.5.0",
+        "numpy>=1.20.0",
+        "matplotlib>=3.5.0",
+        "ccxt>=3.0.0",
+        "ta>=0.10.0",  # Technical analysis indicators
+        "requests>=2.28.0",
+        "python-dotenv>=1.0.0",
+        "fastapi>=0.95.0",
+        "uvicorn>=0.22.0",
+        "pydantic>=2.0.0",
+    ],
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0",
+            "black>=23.0.0",
+            "flake8>=6.0.0",
+            "jupyter>=1.0.0",
+        ],
+        "viz": [
+            "plotly>=5.13.0",
+            "kaleido>=0.2.1",  # For static image export in plotly
+        ],
+    },
+    entry_points={
+        "console_scripts": [
+            "quant-system=main:start_cli",
+            "quant-api=main:start_api",
+        ],
+    },
+    python_requires=">=3.8",
+)
+
+--- .\docs\logging.md ---
+# Quant System Logging Guide
+
+This document describes the logging system used throughout the Quant System project. Proper logging is essential for debugging, auditing, and understanding system behavior.
+
+## Logging Architecture
+
+The logging system uses Python's built-in `logging` module with a customized configuration. The system provides:
+
+- Hierarchical loggers for different components
+- Simultaneous console and file output
+- Different logging levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- Detailed error logging with tracebacks
+- Error handling utilities
+- Timestamp-based log files
+
+## Log Files
+
+Log files are stored in the `logs/` directory and named with a timestamp pattern: `quant_system_YYYYMMDD_HHMMSS.log`. Each run of the system creates a new log file.
+
+## Log Levels
+
+The system uses the following log levels:
+
+- **DEBUG**: Detailed information for debugging and development
+- **INFO**: General information about system operation
+- **WARNING**: Indication of potential issues that don't prevent operation
+- **ERROR**: Error conditions that may cause specific operations to fail
+- **CRITICAL**: Critical errors that may cause the entire system to fail
+
+Console output shows INFO level and above, while file logs capture DEBUG level and above.
+
+## Running with Debug Logging
+
+You can enable debug logging by adding the `--debug` flag to your commands:
+
+### Using main.py
+
+```bash
+# API mode with debug logging
+python main.py api --debug
+
+# CLI analyze command with debug logging
+python main.py cli analyze --symbol BTC/USDT --timeframe 1d --days 100 --debug
+
+# CLI symbols command with debug logging
+python main.py cli symbols --debug
+
+# CLI backtest command with debug logging
+python main.py cli backtest --conditions "RSI below 30" "MACD bullish crossover" --symbol ETH/USDT --debug
+```
+
+### Running CLI Commands Directly
+
+You can also run the CLI commands directly:
+
+```bash
+# Run the CLI module directly with debug logging
+python -m quant_system.interface.cli analyze --symbol BTC/USDT --timeframe 1d --days 100 --debug
+```
+
+## Using the Logging System
+
+### Basic Logging
+
+Import the logger and use it in your components:
+
+```python
+from quant_system.utils import get_logger
+
+# Create a logger for your module
+logger = get_logger("your.module.name")
+
+# Log messages at different levels
+logger.debug("Detailed information for debugging")
+logger.info("General operational information")
+logger.warning("Something unexpected but non-critical happened")
+logger.error("An error occurred that impacts functionality")
+logger.critical("A critical error occurred that may crash the system")
+```
+
+### Error Handling
+
+Use the `ErrorHandler` context manager to handle and log exceptions:
+
+```python
+from quant_system.utils import ErrorHandler
+
+def some_function():
+    with ErrorHandler(context="descriptive operation name") as handler:
+        # Your code here
+        result = some_operation()
+        
+        # If an exception occurs within this block:
+        # 1. It will be logged with context
+        # 2. Full traceback will be saved to log file
+        # 3. Exception will be suppressed (unless exit_on_error=True)
+        
+    return result
+```
+
+For critical operations that should exit on failure:
+
+```python
+with ErrorHandler(context="critical operation", exit_on_error=True) as handler:
+    # If this fails, it will log and exit the program
+    critical_operation()
+```
+
+### Setting Log Levels Programmatically
+
+```python
+from quant_system.utils import set_log_level, DEBUG, INFO, WARNING
+
+# Set console output to debug level
+set_log_level(DEBUG)
+
+# Set console output to info level
+set_log_level(INFO)
+```
+
+## Best Practices
+
+1. **Create a module-specific logger**: Always use `get_logger("module.name")` rather than the root logger.
+
+2. **Use appropriate log levels**: 
+   - DEBUG for detailed information useful during development
+   - INFO for operational information and important events
+   - WARNING for unexpected but non-critical issues
+   - ERROR for failures that impact specific operations
+   - CRITICAL for system-wide failures
+
+3. **Include context in log messages**: Log messages should include relevant identifiers and context.
+
+4. **Use structured information**: For complex data, consider formatting as JSON or using key-value pairs.
+
+5. **Use ErrorHandler for operations that may fail**: This ensures consistent error handling and logging.
+
+6. **Don't log sensitive information**: Avoid logging API keys, credentials, or other sensitive data.
+
+## Log Message Examples
+
+Good log messages include context and clear descriptions:
+
+- ✅ `logger.info(f"Analysis completed for {symbol} with {len(similar_dates)} similar instances found")`
+- ✅ `logger.error(f"Failed to fetch data for {symbol}: {error_message}")`
+- ✅ `logger.debug(f"Processing {len(data_points)} data points for technical indicator calculation")`
+
+Bad log messages lack context or clarity:
+
+- ❌ `logger.info("Analysis done")`
+- ❌ `logger.error("Error occurred")`
+- ❌ `logger.debug("Processing")`
+
+## Viewing Log Files
+
+To view the contents of log files, you can use standard tools:
+
+### Windows
+
+```
+type logs\quant_system_*.log | more
+```
+
+### Linux/macOS
+
+```
+cat logs/quant_system_*.log | less
+```
+
+Or to watch logs in real-time:
+
+```
+tail -f logs/quant_system_*.log
+``` 
+
+--- .\docs\program_data_flow.md ---
+# Complete Program Flow: From Data to Analysis
+
+Let me walk you through the entire flow of your quant system, explaining how data is acquired, processed, analyzed, and presented:
+
+## 1. Entry Point: Main Script
+
+When you run a command like `python main.py cli analyze --symbol BTC/USD --timeframe 1d --days 100`:
+
+1. The `main.py` script parses the command-line arguments
+2. It determines you want to run the CLI interface in "analyze" mode
+3. It sets up logging based on the debug flag
+4. It passes control to the CLI module
+
+## 2. CLI Interface
+
+The CLI module:
+
+1. Creates instances of the core system components
+2. Prints the initial message to the console
+3. Calls the analysis method with your specified parameters
+
+## 3. Data Acquisition
+
+The data flow begins with the `CryptoDataConnector`:
+
+1. The connector first checks the cache for existing data
+   - If cached data exists and is fresh, it's used directly
+   - If cached data exists but is insufficient, it fetches additional data
+   - If no cache exists or a refresh is forced, it fetches from the API
+
+2. When fetching from the API:
+   - The CCXT library makes requests to the exchange (Coinbase)
+   - Data is returned in OHLCV format (Open, High, Low, Close, Volume)
+   - The connector converts this to a pandas DataFrame
+   - The data is cached to CSV files for future use
+
+3. For extended history (like 200+ days):
+   - The connector makes multiple sequential API calls
+   - It uses the 'since' parameter to fetch earlier data
+   - Each batch is merged with existing data
+   - Duplicates are removed and data is sorted by date
+
+## 4. Technical Feature Engineering
+
+The raw price data flows to the `TechnicalFeatures` class:
+
+1. The class analyzes the available data length
+2. It calculates scale factors to adapt indicators to available data
+3. It generates common technical indicators:
+   - Moving averages (SMA with periods adjusted to data length)
+   - Momentum indicators (RSI, MACD)
+   - Volatility indicators (Bollinger Bands, ATR)
+   - Z-scores and custom metrics
+
+4. Data availability handling:
+   - If data is too short for long-term indicators, it uses shorter periods
+   - If certain indicators can't be calculated, they're skipped
+   - NaN values are handled gracefully
+
+5. The enhanced dataframe now contains:
+   - Original price data
+   - Dozens of technical indicators
+   - Custom metrics like distance from highs/lows
+
+## 5. Market Structure Analysis
+
+The indicator-rich dataframe flows to `MarketStructureAnalyzer`:
+
+1. The analyzer examines the current market state
+2. It identifies specific conditions based on the indicators:
+   - Trend conditions (bullish/bearish, above/below moving averages)
+   - Momentum states (overbought/oversold, MACD signals)
+   - Volatility regimes (high/low volatility, Bollinger Band positions)
+   - Price action characteristics (recent moves, support/resistance)
+
+3. Adaptive analysis:
+   - If long-term indicators aren't available, it uses short-term alternatives
+   - If certain indicators are missing, it focuses on available ones
+   - It ensures at least some conditions are identified even with limited data
+
+4. The output is a list of textual market conditions that describe the current state
+
+## 6. Backtesting Similar Conditions
+
+The conditions and indicator data flow to `MarketBacktester`:
+
+1. The backtest engine searches historical data for similar conditions
+   - It uses fuzzy matching to find partial or exact condition matches
+   - It handles keyword variations and synonym matching
+   - It requires a minimum number of matching conditions
+
+2. For each matching historical instance:
+   - It records the date and matched conditions
+   - It calculates forward returns for various time periods (1, 5, 10, 20 days)
+   - It computes statistics on win rates and average returns
+
+3. The output includes:
+   - A dataframe of all similar historical instances
+   - Statistics about forward performance after these conditions
+   - Insights into the historical reliability of the current conditions
+
+## 7. LLM-Enhanced Analysis (Optional)
+
+If configured, the identified conditions and backtest results flow to `LLMAnalyzer`:
+
+1. The analyzer constructs a prompt with:
+   - Current market conditions
+   - Historical performance statistics
+   - Recent price movements
+
+2. The prompt is sent to an LLM API (Claude or GPT-4)
+
+3. The LLM generates a natural language analysis:
+   - Interpretation of current conditions
+   - Historical context and comparisons
+   - Potential scenarios and considerations
+
+## 8. Results Presentation
+
+Finally, results flow back to the CLI interface for presentation:
+
+1. The CLI displays the identified market conditions
+2. It shows statistics about similar historical instances
+3. It presents the forward return expectations
+4. If available, it displays the LLM-generated market summary
+
+## 9. Data Persistence
+
+Throughout this process, data is cached at various stages:
+
+1. Raw OHLCV data is stored in CSV files
+2. Cache metadata tracks freshness and hit/miss statistics
+3. The next time you run analysis, this cached data is used to:
+   - Reduce API calls
+   - Enable longer-term analysis
+   - Improve performance
+
+## Key Data Transformations
+
+The data undergoes several key transformations:
+
+1. **Raw Data** → OHLCV DataFrame
+2. **OHLCV DataFrame** → Indicator-rich DataFrame
+3. **Indicator DataFrame** → Market Conditions (text)
+4. **Conditions + History** → Performance Statistics
+5. **All of the above** → Natural Language Summary (via LLM)
+
+This comprehensive flow allows the system to start with simple price data and end with sophisticated market analysis that adapts to available data and improves over time as the cache grows.
+
+--- .\quant_system\utils.py ---
+import os
+import sys
+import logging
+import traceback
+from datetime import datetime
+from pathlib import Path
+
+# Configure logging levels
+DEBUG = logging.DEBUG
+INFO = logging.INFO
+WARNING = logging.WARNING
+ERROR = logging.ERROR
+CRITICAL = logging.CRITICAL
+
+# Create logs directory if it doesn't exist
+logs_dir = Path("logs")
+logs_dir.mkdir(exist_ok=True)
+
+# Create a timestamp for log files
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = logs_dir / f"quant_system_{timestamp}.log"
+
+# Configure root logger
+logger = logging.getLogger("quant_system")
+logger.setLevel(logging.DEBUG)
+
+# Create file handler for logging to file
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+
+# Create console handler for logging to console
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+# Create formatters
+file_formatter = logging.Formatter(
+    "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
+)
+console_formatter = logging.Formatter(
+    "[%(levelname)s] %(message)s"
+)
+
+# Apply formatters to handlers
+file_handler.setFormatter(file_formatter)
+console_handler.setFormatter(console_formatter)
+
+# Add handlers to logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Function to log exceptions with traceback
+def log_exception(exc_info=None):
+    """
+    Log an exception with full traceback.
+    
+    Args:
+        exc_info: Exception info from sys.exc_info(). If None, current exception is used.
+    """
+    if exc_info is None:
+        exc_info = sys.exc_info()
+    
+    if exc_info[0] is not None:
+        exc_type, exc_value, exc_tb = exc_info
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logger.error(f"Exception occurred:\n{tb_str}")
+
+# Context manager for error handling
+class ErrorHandler:
+    def __init__(self, context="operation", exit_on_error=False):
+        """
+        Context manager for handling and logging errors.
+        
+        Args:
+            context: Description of the operation being performed
+            exit_on_error: Whether to exit the program on error
+        """
+        self.context = context
+        self.exit_on_error = exit_on_error
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            logger.error(f"Error during {self.context}: {exc_val}")
+            log_exception((exc_type, exc_val, exc_tb))
+            
+            if self.exit_on_error:
+                logger.critical(f"Exiting due to error in {self.context}")
+                sys.exit(1)
+            
+            return True  # Suppress the exception
+        return False
+
+# Function to set logging level
+def set_log_level(level):
+    """
+    Set the logging level for the console handler.
+    
+    Args:
+        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    console_handler.setLevel(level)
+    logger.info(f"Console log level set to {logging.getLevelName(level)}")
+
+# Function to get a named logger (child of root logger)
+def get_logger(name):
+    """
+    Get a named logger that inherits from the root logger.
+    
+    Args:
+        name: Name for the logger, typically the module name
+        
+    Returns:
+        Logger instance
+    """
+    return logging.getLogger(f"quant_system.{name}") 
+
+--- .\quant_system\analysis\backtest.py ---
+# quant_system/analysis/backtest.py
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Any
+
+from quant_system.utils import get_logger
+
+# Initialize logger
+logger = get_logger("analysis.backtest")
+
+class MarketBacktester:
+    """Backtest performance following certain market conditions"""
+    
+    @staticmethod
+    def find_similar_conditions(df, conditions, lookback_days=None, min_match_count=1, exact_match=False):
+        """Find historical periods with similar conditions
+        
+        Args:
+            df: DataFrame with price data and indicators
+            conditions: List of market conditions to search for
+            lookback_days: Number of days to look back (None for all available data)
+            min_match_count: Minimum number of matching conditions required
+            exact_match: Whether all conditions must match exactly
+            
+        Returns:
+            List of tuples with (date, matched_conditions)
+        """
+        if df.empty:
+            logger.warning("Cannot find similar conditions: Empty dataframe")
+            return []
+        
+        similar_dates = []
+        condition_keywords = [cond.lower() for cond in conditions]
+        
+        # Determine lookback range
+        if lookback_days is None:
+            lookback_df = df.copy()
+        else:
+            # Don't look back more than the available data
+            max_lookback = min(lookback_days, len(df) - 1)
+            lookback_df = df.iloc[:-1].iloc[-max_lookback:]
+        
+        logger.info(f"Searching for similar conditions across {len(lookback_df)} historical data points")
+        logger.debug(f"Target conditions: {', '.join(conditions)}")
+        
+        # Helper function to check if strings match based on keywords
+        def conditions_match(target, reference):
+            """Check if a condition matches another based on keywords"""
+            target_lower = target.lower()
+            reference_lower = reference.lower()
+            
+            # Check for exact matches first
+            if target_lower == reference_lower:
+                return True
+                
+            # Check for partial matches (one is substring of the other)
+            if target_lower in reference_lower or reference_lower in target_lower:
+                return True
+                
+            # Look for keyword matches
+            target_words = set(target_lower.split())
+            reference_words = set(reference_lower.split())
+            
+            # If they share at least 3 significant words, consider it a match
+            shared_words = target_words.intersection(reference_words)
+            significant_words = [w for w in shared_words if len(w) > 3 and w not in {'with', 'from', 'that', 'this', 'above', 'below', 'near'}]
+            
+            return len(significant_words) >= 2
+        
+        # Process each historical data point
+        for i in range(len(lookback_df)):
+            date = lookback_df.index[i]
+            current = lookback_df.iloc[i]
+            prev = lookback_df.iloc[i-1] if i > 0 else None
+            
+            # Skip rows with NaN values in key columns
+            if pd.isna(current['close']):
+                continue
+                
+            # Identify conditions at this historical point
+            historical_conditions = MarketBacktester._identify_historical_conditions(lookback_df, i, prev)
+            
+            # Match conditions between current target and historical point
+            matched_conditions = []
+            
+            for hist_cond in historical_conditions:
+                # For each current condition we're looking for
+                for target_cond in conditions:
+                    if conditions_match(target_cond, hist_cond):
+                        matched_conditions.append(hist_cond)
+                        break
+            
+            # Check if we have enough matches
+            if len(matched_conditions) >= min_match_count:
+                if exact_match and len(matched_conditions) < len(conditions):
+                    # Skip if exact match required but not all conditions matched
+                    continue
+                    
+                similar_dates.append((date, matched_conditions))
+                logger.debug(f"Found match at {date.date()}: {', '.join(matched_conditions)}")
+        
+        logger.info(f"Found {len(similar_dates)} similar historical instances")
+        return similar_dates
+    
+    @staticmethod
+    def _identify_historical_conditions(df, idx, prev):
+        """Identify market conditions at a historical data point
+        
+        This is a simplified version of MarketStructureAnalyzer.identify_conditions
+        that works on a specific row in a dataframe.
+        
+        Args:
+            df: DataFrame with price data and indicators
+            idx: Index of the row to analyze
+            prev: Previous row for calculations requiring it
+            
+        Returns:
+            List of identified conditions
+        """
+        conditions = []
+        current = df.iloc[idx]
+        
+        # ---------- TREND CONDITIONS ----------
+        
+        # Moving Average relationships
+        if 'sma_20' in df.columns and pd.notna(current['sma_20']):
+            if current['close'] > current['sma_20']:
+                conditions.append("Price above 20-day MA")
+            else:
+                conditions.append("Price below 20-day MA")
+        
+        if 'sma_50' in df.columns and pd.notna(current['sma_50']):
+            if current['close'] > current['sma_50']:
+                conditions.append("Price above 50-day MA")
+            else:
+                conditions.append("Price below 50-day MA")
+        
+        if 'sma_200' in df.columns and pd.notna(current['sma_200']):
+            if current['close'] > current['sma_200']:
+                conditions.append("Price above 200-day MA")
+            else:
+                conditions.append("Price below 200-day MA")
+            
+            # Full trend with 50-day MA
+            if 'sma_50' in df.columns and pd.notna(current['sma_50']):
+                if current['close'] > current['sma_50'] and current['sma_50'] > current['sma_200']:
+                    conditions.append("Bullish trend")
+                elif current['close'] < current['sma_50'] and current['sma_50'] < current['sma_200']:
+                    conditions.append("Bearish trend")
+            
+            # Golden/Death cross
+            if prev is not None and 'sma_50' in df.columns and 'sma_200' in df.columns:
+                if pd.notna(prev['sma_50']) and pd.notna(prev['sma_200']):
+                    if prev['sma_50'] < prev['sma_200'] and current['sma_50'] > current['sma_200']:
+                        conditions.append("Golden cross")
+                    elif prev['sma_50'] > prev['sma_200'] and current['sma_50'] < current['sma_200']:
+                        conditions.append("Death cross")
+        
+        # ---------- MOMENTUM CONDITIONS ----------
+        
+        # RSI
+        if 'rsi_14' in df.columns and pd.notna(current['rsi_14']):
+            if current['rsi_14'] < 30:
+                conditions.append("Oversold")
+            elif current['rsi_14'] > 70:
+                conditions.append("Overbought")
+        
+        # MACD
+        if all(col in df.columns for col in ['macd', 'macd_signal']) and pd.notna(current['macd']) and pd.notna(current['macd_signal']):
+            if current['macd'] > current['macd_signal']:
+                conditions.append("MACD above signal")
+            else:
+                conditions.append("MACD below signal")
+                
+            if prev is not None and pd.notna(prev['macd']) and pd.notna(prev['macd_signal']):
+                if prev['macd'] < prev['macd_signal'] and current['macd'] > current['macd_signal']:
+                    conditions.append("MACD bullish crossover")
+                elif prev['macd'] > prev['macd_signal'] and current['macd'] < current['macd_signal']:
+                    conditions.append("MACD bearish crossover")
+        
+        # ---------- VOLATILITY CONDITIONS ----------
+        
+        # Bollinger Bands
+        bb_columns = ['bb_upper', 'bb_lower']
+        if all(col in df.columns for col in bb_columns) and all(pd.notna(current[col]) for col in bb_columns):
+            if current['close'] < current['bb_lower']:
+                conditions.append("Price below lower Bollinger Band")
+            elif current['close'] > current['bb_upper']:
+                conditions.append("Price above upper Bollinger Band")
+        
+        # ATR
+        if 'atr_14' in df.columns and pd.notna(current['atr_14']) and current['close'] > 0:
+            atr_pct = (current['atr_14'] / current['close']) * 100
+            
+            if atr_pct < 1.5:
+                conditions.append("Low volatility")
+            elif atr_pct > 5.0:
+                conditions.append("High volatility")
+        
+        # ---------- PRICE ACTION ----------
+        
+        # Recent price changes can be calculated even with minimal data
+        lookback = min(5, idx)
+        if lookback > 0 and pd.notna(df.iloc[idx-lookback]['close']):
+            price_change = ((current['close'] / df.iloc[idx-lookback]['close']) - 1) * 100
+            
+            if price_change > 10:
+                conditions.append("Strong bullish move")
+            elif price_change < -10:
+                conditions.append("Strong bearish move")
+        
+        return conditions
+    
+    @staticmethod
+    def analyze_forward_returns(df, similar_dates, forward_days=[1, 5, 10, 20]):
+        """Analyze returns following similar conditions
+        
+        Args:
+            df: DataFrame with price data
+            similar_dates: List of tuples with (date, matched_conditions)
+            forward_days: List of forward periods to analyze
+            
+        Returns:
+            (results_df, stats) - DataFrame with detailed results and dictionary with stats
+        """
+        if not similar_dates:
+            logger.warning("No similar dates provided for forward returns analysis")
+            return pd.DataFrame(), {}
+        
+        results = []
+        
+        logger.info(f"Analyzing forward returns for {len(similar_dates)} instances")
+        logger.debug(f"Forward periods: {forward_days} days")
+        
+        for date, conditions in similar_dates:
+            try:
+                date_loc = df.index.get_loc(date)
+                
+                # Skip if we don't have enough forward data
+                max_forward = max(forward_days)
+                if date_loc + max_forward >= len(df):
+                    logger.debug(f"Skipping {date.date()}: insufficient forward data")
+                    continue
+                
+                # Calculate forward returns
+                base_price = df.iloc[date_loc]['close']
+                returns = {}
+                
+                for days in forward_days:
+                    # Ensure we have data at the forward date
+                    if date_loc + days < len(df) and pd.notna(df.iloc[date_loc + days]['close']):
+                        future_price = df.iloc[date_loc + days]['close']
+                        pct_return = (future_price - base_price) / base_price * 100
+                        returns[f"{days}d_return"] = pct_return
+                    else:
+                        logger.debug(f"Missing {days}-day forward data for {date.date()}")
+                
+                # Add record if we have at least one valid return
+                if returns:
+                    results.append({
+                        'date': date,
+                        'conditions': conditions,
+                        **returns
+                    })
+            except Exception as e:
+                logger.error(f"Error calculating forward returns for {date}: {e}")
+        
+        # Convert to DataFrame for easy analysis
+        results_df = pd.DataFrame(results) if results else pd.DataFrame()
+        
+        # Calculate stats
+        stats = {}
+        if not results_df.empty:
+            for days in forward_days:
+                col = f"{days}d_return"
+                if col in results_df.columns:
+                    valid_returns = results_df[col].dropna()
+                    
+                    if not valid_returns.empty:
+                        stats[f"{days}d_mean"] = valid_returns.mean()
+                        stats[f"{days}d_median"] = valid_returns.median()
+                        stats[f"{days}d_std"] = valid_returns.std()
+                        stats[f"{days}d_min"] = valid_returns.min()
+                        stats[f"{days}d_max"] = valid_returns.max()
+                        stats[f"{days}d_positive_pct"] = (valid_returns > 0).mean() * 100
+                        stats[f"{days}d_count"] = len(valid_returns)
+                        
+                        logger.info(f"{days}-day forward returns: mean={stats[f'{days}d_mean']:.2f}%, "
+                                  f"win rate={stats[f'{days}d_positive_pct']:.2f}%")
+        else:
+            logger.warning("No valid forward returns calculated")
+        
+        return results_df, stats
+
+--- .\quant_system\analysis\llm_interface.py ---
+import json
+import requests
+import os
+
+class LLMAnalyzer:
+    """Interface with LLMs for market analysis"""
+    
+    def __init__(self, api_key=None):
+        self.api_key = api_key or os.environ.get("LLM_API_KEY")
+        
+    def generate_market_summary(self, market_data, conditions, backtest_stats):
+        """Generate a market summary using an LLM"""
+        # For simplicity, we'll use a template for now
+        # In production, this would call an LLM API
+        
+        # Create a simplified market summary template
+        recent_price = market_data.iloc[-1]['close']
+        price_change_1d = (recent_price - market_data.iloc[-2]['close']) / market_data.iloc[-2]['close'] * 100
+        price_change_7d = (recent_price - market_data.iloc[-7]['close']) / market_data.iloc[-7]['close'] * 100
+        
+        summary = f"""
+        Market Summary:
+        - Current price: ${recent_price:.2f}
+        - 24h change: {price_change_1d:.2f}%
+        - 7d change: {price_change_7d:.2f}%
+
+        Market Conditions:
+        - {', '.join(conditions)}
+
+        Historical Performance (similar conditions):
+        """
+        
+        # Add backtest stats
+        for period, value in backtest_stats.items():
+            if 'mean' in period:
+                days = period.split('d_')[0]
+                summary += f"- {days}-day forward return (avg): {value:.2f}%\n"
+            if 'positive_pct' in period:
+                days = period.split('d_')[0]
+                summary += f"- {days}-day win rate: {value:.2f}%\n"
+        
+        return summary
+    
+    def analyze_with_llm(self, prompt, max_tokens=500):
+        """Send a prompt to LLM API and get a response"""
+        # This is a placeholder for actual LLM API call
+        # In a real implementation, you would call Claude, GPT-4, etc.
+        
+        if not self.api_key:
+            return "No API key provided for LLM service"
+        
+        # Example implementation for Claude API
+        # Would need to be adapted based on the specific LLM service used
+        try:
+            response = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": "claude-3-haiku-20240307",
+                    "max_tokens": max_tokens,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ]
+                }
+            )
+            
+            if response.status_code == 200:
+                return response.json()["content"][0]["text"]
+            else:
+                return f"Error: {response.status_code} - {response.text}"
+        
+        except Exception as e:
+            return f"Error calling LLM API: {str(e)}"
+
+
+--- .\quant_system\analysis\market_structure.py ---
+# quant_system/analysis/market_structure.py
+import numpy as np
+import pandas as pd
+from typing import List
+
+from quant_system.utils import get_logger
+
+# Initialize logger
+logger = get_logger("analysis.market_structure")
+
+class MarketStructureAnalyzer:
+    """Analyze market structure and conditions"""
+    
+    @staticmethod
+    def identify_conditions(df) -> List[str]:
+        """Identify current market conditions based on indicators
+        
+        This method analyzes the technical indicators in the dataframe and
+        returns a list of detected market conditions.
+        
+        Args:
+            df: DataFrame with price data and technical indicators
+            
+        Returns:
+            List of identified market conditions
+        """
+        if df.empty:
+            logger.warning("Cannot identify conditions: Empty dataframe")
+            return ["Error: Empty dataframe"]
+            
+        # Log the shape and available columns for debugging
+        logger.debug(f"Identifying conditions from dataframe with {len(df)} rows")
+        logger.debug(f"Available columns: {', '.join(df.columns)}")
+        
+        # Check we have enough data for analysis
+        if len(df) < 20:
+            logger.warning(f"Not enough data for analysis: {len(df)} rows")
+            return [f"Insufficient data: Only {len(df)} candles (minimum 20 required)"]
+            
+        conditions = []
+        
+        # Get the most recent indicators
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else None
+        
+        # Check for required columns and handle missing data
+        required_columns = {
+            'close': 'closing price',
+            'high': 'high price',
+            'low': 'low price',
+            'volume': 'volume'
+        }
+        
+        missing_columns = [f"{name} ({desc})" for name, desc in required_columns.items() 
+                          if name not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required price columns: {', '.join(missing_columns)}")
+            return [f"Missing essential data: {', '.join(missing_columns)}"]
+        
+        # Log latest price data
+        logger.debug(f"Latest close: {latest['close']}, high: {latest['high']}, low: {latest['low']}")
+        
+        # ---------- TREND ANALYSIS ----------
+        
+        # Check for short-term moving averages (less dependent on long history)
+        if 'sma_20' in df.columns and pd.notna(latest['sma_20']):
+            if latest['close'] > latest['sma_20']:
+                conditions.append("Price above 20-day MA (short-term bullish)")
+            else:
+                conditions.append("Price below 20-day MA (short-term bearish)")
+        
+        # Check for medium-term trend using 50-day MA if available
+        if 'sma_50' in df.columns and pd.notna(latest['sma_50']):
+            if latest['close'] > latest['sma_50']:
+                conditions.append("Price above 50-day MA (medium-term bullish)")
+            else:
+                conditions.append("Price below 50-day MA (medium-term bearish)")
+        
+        # Use 200-day MA only if we have enough data
+        if 'sma_200' in df.columns and pd.notna(latest['sma_200']):
+            # Full trend analysis with 50 and 200 day MAs
+            if 'sma_50' in df.columns and pd.notna(latest['sma_50']):
+                if latest['close'] > latest['sma_50'] and latest['sma_50'] > latest['sma_200']:
+                    conditions.append("Bullish trend (price above 50 & 200 MAs)")
+                elif latest['close'] < latest['sma_50'] and latest['sma_50'] < latest['sma_200']:
+                    conditions.append("Bearish trend (price below 50 & 200 MAs)")
+            
+            # Golden/Death cross detection (requires previous data point)
+            if prev is not None and 'sma_50' in df.columns and 'sma_200' in df.columns:
+                if pd.notna(prev['sma_50']) and pd.notna(prev['sma_200']):
+                    if prev['sma_50'] < prev['sma_200'] and latest['sma_50'] > latest['sma_200']:
+                        conditions.append("Golden cross (50 MA crossed above 200 MA)")
+                    elif prev['sma_50'] > prev['sma_200'] and latest['sma_50'] < latest['sma_200']:
+                        conditions.append("Death cross (50 MA crossed below 200 MA)")
+        else:
+            logger.debug("200-day MA not available or contains NaN values")
+                    
+        # ---------- MOMENTUM ANALYSIS ----------
+        
+        # RSI analysis
+        if 'rsi_14' in df.columns and pd.notna(latest['rsi_14']):
+            logger.debug(f"Latest RSI: {latest['rsi_14']}")
+            
+            if latest['rsi_14'] < 30:
+                conditions.append("Oversold (RSI below 30)")
+            elif latest['rsi_14'] > 70:
+                conditions.append("Overbought (RSI above 70)")
+            elif 30 <= latest['rsi_14'] < 40:
+                conditions.append("Near oversold territory (RSI between 30-40)")
+            elif 60 < latest['rsi_14'] <= 70:
+                conditions.append("Near overbought territory (RSI between 60-70)")
+        
+        # MACD analysis
+        if all(col in df.columns for col in ['macd', 'macd_signal']) and pd.notna(latest['macd']) and pd.notna(latest['macd_signal']):
+            logger.debug(f"Latest MACD: {latest['macd']}, Signal: {latest['macd_signal']}")
+            
+            # Current MACD position
+            if latest['macd'] > latest['macd_signal']:
+                conditions.append("MACD above signal line (bullish)")
+            else:
+                conditions.append("MACD below signal line (bearish)")
+                
+            # MACD crossover (requires previous data point)
+            if prev is not None and pd.notna(prev['macd']) and pd.notna(prev['macd_signal']):
+                if prev['macd'] < prev['macd_signal'] and latest['macd'] > latest['macd_signal']:
+                    conditions.append("MACD bullish crossover")
+                elif prev['macd'] > prev['macd_signal'] and latest['macd'] < latest['macd_signal']:
+                    conditions.append("MACD bearish crossover")
+        
+        # ---------- VOLATILITY ANALYSIS ----------
+        
+        # Bollinger Bands analysis
+        bb_columns = ['bb_upper', 'bb_lower']
+        if all(col in df.columns for col in bb_columns) and all(pd.notna(latest[col]) for col in bb_columns):
+            logger.debug(f"Bollinger Bands - Upper: {latest['bb_upper']}, Lower: {latest['bb_lower']}")
+            
+            if latest['close'] < latest['bb_lower']:
+                conditions.append("Price below lower Bollinger Band (potential reversal up)")
+            elif latest['close'] > latest['bb_upper']:
+                conditions.append("Price above upper Bollinger Band (potential reversal down)")
+            
+            # Calculate bandwidth if possible
+            if 'sma_20' in df.columns and pd.notna(latest['sma_20']):
+                bandwidth = (latest['bb_upper'] - latest['bb_lower']) / latest['sma_20']
+                
+                if bandwidth < 0.10:  # Threshold can be adjusted
+                    conditions.append("Low volatility (narrow Bollinger Bands)")
+                elif bandwidth > 0.40:  # Threshold can be adjusted
+                    conditions.append("High volatility (wide Bollinger Bands)")
+        
+        # ATR for volatility regime
+        if 'atr_14' in df.columns and pd.notna(latest['atr_14']):
+            # Calculate ATR as percentage of price
+            atr_pct = (latest['atr_14'] / latest['close']) * 100
+            logger.debug(f"ATR: {latest['atr_14']}, ATR%: {atr_pct:.2f}%")
+            
+            if atr_pct < 1.5:
+                conditions.append("Low volatility regime (ATR < 1.5% of price)")
+            elif atr_pct > 5.0:
+                conditions.append("High volatility regime (ATR > 5% of price)")
+                
+        # Explicit volatility calculation
+        if 'volatility_20' in df.columns and pd.notna(latest['volatility_20']):
+            logger.debug(f"20-day volatility: {latest['volatility_20']}")
+            
+            # Use percentiles of recent volatility to determine regime
+            if len(df) >= 60:  # Need at least some history to calculate percentiles
+                volatility_series = df['volatility_20'].dropna()
+                percentiles = np.percentile(volatility_series, [25, 75])
+                
+                if latest['volatility_20'] < percentiles[0]:
+                    conditions.append("Low volatility regime (bottom 25% of recent range)")
+                elif latest['volatility_20'] > percentiles[1]:
+                    conditions.append("High volatility regime (top 25% of recent range)")
+            else:
+                # Fallback with fixed thresholds if not enough history
+                if latest['volatility_20'] < 0.015:  # 1.5% daily volatility
+                    conditions.append("Low volatility")
+                elif latest['volatility_20'] > 0.04:  # 4% daily volatility
+                    conditions.append("High volatility")
+        
+        # ---------- PRICE ACTION ANALYSIS ----------
+        
+        # Recent price performance (5-day)
+        if len(df) >= 5:
+            five_day_change = ((latest['close'] / df.iloc[-5]['close']) - 1) * 100
+            logger.debug(f"5-day price change: {five_day_change:.2f}%")
+            
+            if five_day_change > 10:
+                conditions.append(f"Strong bullish move (+{five_day_change:.1f}% in 5 days)")
+            elif five_day_change < -10:
+                conditions.append(f"Strong bearish move ({five_day_change:.1f}% in 5 days)")
+        
+        # Volume analysis
+        if 'volume' in df.columns:
+            # Calculate average volume over last 20 days
+            avg_volume = df['volume'].tail(20).mean()
+            latest_volume = latest['volume']
+            volume_ratio = latest_volume / avg_volume if avg_volume > 0 else 0
+            
+            logger.debug(f"Latest volume: {latest_volume}, Avg volume: {avg_volume}, Ratio: {volume_ratio:.2f}")
+            
+            if volume_ratio > 2.0:
+                conditions.append(f"Heavy volume ({volume_ratio:.1f}x average)")
+            elif volume_ratio < 0.5:
+                conditions.append(f"Light volume ({volume_ratio:.1f}x average)")
+        
+        # ---------- SUPPORT/RESISTANCE ANALYSIS ----------
+        
+        # Check for price near recent highs/lows
+        if len(df) >= 20:
+            recent_high = df['high'].tail(20).max()
+            recent_low = df['low'].tail(20).min()
+            
+            high_distance = (recent_high - latest['close']) / latest['close'] * 100
+            low_distance = (latest['close'] - recent_low) / latest['close'] * 100
+            
+            logger.debug(f"Distance from 20-day high: {high_distance:.2f}%, from low: {low_distance:.2f}%")
+            
+            if high_distance < 1.0:
+                conditions.append("Price near 20-day high (potential resistance)")
+            elif low_distance < 1.0:
+                conditions.append("Price near 20-day low (potential support)")
+        
+        # If we didn't identify any conditions (unusual but possible)
+        if not conditions:
+            logger.warning("No specific market conditions identified")
+            conditions.append("Neutral market conditions")
+        
+        # Log all identified conditions
+        logger.info(f"Identified {len(conditions)} market conditions: {', '.join(conditions)}")
+        
+        return conditions
+
+--- .\quant_system\analysis\__init__.py ---
+
+
+--- .\quant_system\data\connectors.py ---
+# quant_system/data/connectors.py
+import os
+import pandas as pd
+import ccxt
+import traceback
+from datetime import datetime, timedelta
+import sys
+import time
+
+# Add the project root to the path if needed
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Import our logging utilities and cache
+from quant_system.utils import get_logger, ErrorHandler
+from quant_system.data.cache import DataCache
+
+# Initialize logger for this module
+logger = get_logger("data.connectors")
+
+class CryptoDataConnector:
+    """Connector for cryptocurrency market data with caching"""
+    
+    def __init__(self, exchange_id='coinbase', use_cache=True, cache_dir="cache"):
+        """Initialize the data connector
+        
+        Args:
+            exchange_id: ID of the exchange to use (e.g., 'coinbase', 'binance')
+            use_cache: Whether to use data caching
+            cache_dir: Directory for cached data
+        """
+        logger.info(f"Initializing CryptoDataConnector with exchange: {exchange_id}")
+        self.use_cache = use_cache
+        
+        try:
+            self.exchange = getattr(ccxt, exchange_id)({
+                'enableRateLimit': True,
+            })
+            logger.debug(f"Successfully connected to {exchange_id} API")
+            
+            # Initialize cache if enabled
+            if self.use_cache:
+                self.cache = DataCache(cache_dir=cache_dir)
+                logger.info("Data caching enabled")
+            else:
+                self.cache = None
+                logger.info("Data caching disabled")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize exchange {exchange_id}: {e}")
+            logger.debug(traceback.format_exc())
+            raise
+    
+    def fetch_paginated_ohlcv(self, symbol='BTC/USD', timeframe='1d', 
+                              from_datetime=None, to_datetime=None, retry_delay=30):
+        """Fetch complete OHLCV data for a given period using pagination
+        
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTC/USD')
+            timeframe: Timeframe (e.g., '1d', '1h')
+            from_datetime: Start datetime as string 'YYYY-MM-DD HH:MM:SS' or datetime object
+            to_datetime: End datetime as string 'YYYY-MM-DD HH:MM:SS' or datetime object
+            retry_delay: Delay in seconds before retrying on error
+            
+        Returns:
+            DataFrame with OHLCV data
+        """
+        logger.info(f"Fetching paginated OHLCV data for {symbol} ({timeframe}) from {from_datetime} to {to_datetime}")
+        
+        # Convert string datetimes to timestamp if provided
+        if from_datetime is not None:
+            if isinstance(from_datetime, str):
+                # Add time component if missing
+                if len(from_datetime) == 10:  # YYYY-MM-DD format
+                    from_datetime = f"{from_datetime} 00:00:00"
+                from_timestamp = self.exchange.parse8601(from_datetime)
+                if from_timestamp is None:
+                    logger.error(f"Could not parse from_datetime: {from_datetime}")
+                    from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
+            elif isinstance(from_datetime, datetime):
+                from_timestamp = int(from_datetime.timestamp() * 1000)
+            else:
+                from_timestamp = from_datetime  # Assume it's already a timestamp
+        else:
+            # Default to 1 year ago if not specified
+            from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
+            
+        # Set end timestamp
+        if to_datetime is not None:
+            if isinstance(to_datetime, str):
+                # Add time component if missing
+                if len(to_datetime) == 10:  # YYYY-MM-DD format
+                    to_datetime = f"{to_datetime} 23:59:59"
+                to_timestamp = self.exchange.parse8601(to_datetime)
+                if to_timestamp is None:
+                    logger.error(f"Could not parse to_datetime: {to_datetime}")
+                    to_timestamp = int(datetime.now().timestamp() * 1000)
+            elif isinstance(to_datetime, datetime):
+                to_timestamp = int(to_datetime.timestamp() * 1000)
+            else:
+                to_timestamp = to_datetime  # Assume it's already a timestamp
+        else:
+            to_timestamp = int(datetime.now().timestamp() * 1000)
+            
+        logger.debug(f"Timestamp range: {from_timestamp} to {to_timestamp}")
+        
+        # First, check if we already have this data in the standard cache
+        if self.use_cache:
+            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=None)
+            
+            if cached_data is not None and not cached_data.empty:
+                logger.info(f"Found existing cached data for {symbol} ({len(cached_data)} records)")
+                
+                # Filter to the requested time range
+                from_dt = datetime.fromtimestamp(from_timestamp / 1000)
+                to_dt = datetime.fromtimestamp(to_timestamp / 1000)
+                filtered_data = cached_data[
+                    (cached_data.index >= from_dt) & 
+                    (cached_data.index <= to_dt)
+                ]
+                
+                # Check if we have complete data for the requested range
+                if len(filtered_data) > 0:
+                    has_start = filtered_data.index.min() <= from_dt
+                    has_end = filtered_data.index.max() >= to_dt
+                    
+                    if has_start and has_end:
+                        logger.info(f"Complete data found in cache for requested time range ({len(filtered_data)} records)")
+                        return filtered_data
+                    
+                    # If we have partial data, we could fetch just what's missing
+                    # But for simplicity, we'll fetch everything and merge with existing cache
+            
+        # Fetch data with pagination
+        all_ohlcv = []
+        current_timestamp = from_timestamp
+        
+        while current_timestamp < to_timestamp:
+            try:
+                logger.debug(f"Fetching candles from {self.exchange.iso8601(current_timestamp)}")
+                ohlcvs = self.exchange.fetch_ohlcv(symbol, timeframe, since=current_timestamp)
+                
+                if not ohlcvs or len(ohlcvs) == 0:
+                    logger.warning(f"No data returned at timestamp {current_timestamp}, stopping pagination")
+                    break
+                    
+                logger.debug(f"Fetched {len(ohlcvs)} candles")
+                
+                # Filter out any data beyond our end timestamp
+                ohlcvs = [candle for candle in ohlcvs if candle[0] <= to_timestamp]
+                
+                # Add to our result set
+                all_ohlcv.extend(ohlcvs)
+                
+                # Update timestamp for next iteration based on last candle
+                if len(ohlcvs) > 0:
+                    # Move timestamp forward by 1ms to avoid duplicates
+                    current_timestamp = ohlcvs[-1][0] + 1
+                else:
+                    # If we got an empty response but didn't break earlier, move forward in time
+                    timeframe_ms = self._timeframe_to_milliseconds(timeframe)
+                    current_timestamp += timeframe_ms * 100  # Skip ahead 100 candles
+                
+                # If we got fewer candles than expected, we might be at the end
+                if len(ohlcvs) < 100:  # Most exchanges return max 100-1000 candles per request
+                    logger.debug("Received fewer candles than expected, may have reached the end")
+                    # Only break if we actually got some candles, otherwise continue
+                    if len(ohlcvs) > 0:
+                        break
+            
+            except (ccxt.ExchangeError, ccxt.AuthenticationError,
+                   ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as error:
+                error_msg = f"Error fetching data: {type(error).__name__}, {error.args}"
+                logger.error(error_msg)
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                
+                # Wait before retrying
+                time.sleep(retry_delay)
+            
+            except Exception as e:
+                logger.error(f"Unexpected error fetching paginated data: {e}")
+                logger.debug(traceback.format_exc())
+                break
+        
+        # Convert to DataFrame
+        if all_ohlcv:
+            df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Remove duplicates that might occur at pagination boundaries
+            df = df[~df.index.duplicated(keep='first')]
+            df = df.sort_index()
+            
+            logger.info(f"Successfully fetched {len(df)} records from {df.index[0]} to {df.index[-1]}")
+            
+            # Update the standard OHLCV cache
+            if self.use_cache:
+                logger.debug(f"Updating standard OHLCV cache for {symbol}")
+                combined_df = self.cache.update_ohlcv_cache(symbol, timeframe, df)
+                
+                # Return only the requested time range
+                from_dt = datetime.fromtimestamp(from_timestamp / 1000)
+                to_dt = datetime.fromtimestamp(to_timestamp / 1000)
+                result_df = combined_df[
+                    (combined_df.index >= from_dt) & 
+                    (combined_df.index <= to_dt)
+                ]
+                return result_df
+            
+            return df
+        else:
+            logger.warning(f"No data fetched for {symbol} in the specified time range")
+            return pd.DataFrame()
+    
+    def _timeframe_to_milliseconds(self, timeframe):
+        """Convert a timeframe string to milliseconds"""
+        unit = timeframe[-1]
+        value = int(timeframe[:-1])
+        
+        if unit == 'm':
+            return value * 60 * 1000
+        elif unit == 'h':
+            return value * 60 * 60 * 1000
+        elif unit == 'd':
+            return value * 24 * 60 * 60 * 1000
+        elif unit == 'w':
+            return value * 7 * 24 * 60 * 60 * 1000
+        else:
+            logger.warning(f"Unknown timeframe unit: {unit}, defaulting to days")
+            return value * 24 * 60 * 60 * 1000
+    
+    def fetch_ohlcv(self, symbol='BTC/USD', timeframe='1d', limit=100, force_refresh=False):
+        """Fetch OHLCV data for a given symbol, with caching
+        
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTC/USD')
+            timeframe: Timeframe (e.g., '1d', '1h')
+            limit: Number of candles to fetch
+            force_refresh: Whether to ignore cache and fetch new data
+            
+        Returns:
+            DataFrame with OHLCV data
+        """
+        logger.info(f"Fetching OHLCV data for {symbol} ({timeframe}, limit={limit})")
+        
+        # Try to get data from cache if enabled and not forcing refresh
+        if self.use_cache and not force_refresh:
+            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe)
+            
+            if cached_data is not None and len(cached_data) >= limit:
+                logger.info(f"Using cached data for {symbol} ({len(cached_data)} records)")
+                
+                # Return only the requested number of records
+                return cached_data.iloc[-limit:]
+            
+            elif cached_data is not None:
+                logger.info(f"Cached data insufficient ({len(cached_data)} < {limit} records), fetching additional data")
+                
+                # Calculate how many additional records we need
+                # Add some buffer to account for potential gaps
+                additional_limit = limit - len(cached_data) + 10
+                
+                # For daily data, check for the latest date to determine if we need an update
+                if timeframe == '1d' and not cached_data.empty:
+                    last_date = cached_data.index[-1].date()
+                    today = datetime.today().date()
+                    
+                    if last_date >= today:
+                        logger.info(f"Cached daily data is up-to-date (last: {last_date}, today: {today})")
+                        return cached_data.iloc[-limit:]
+                
+                # Fetch additional data and merge with cache
+                new_data = self._fetch_from_api(symbol, timeframe, additional_limit)
+                
+                if not new_data.empty:
+                    # Update cache with new data
+                    combined_data = self.cache.update_ohlcv_cache(symbol, timeframe, new_data)
+                    logger.info(f"Combined data has {len(combined_data)} records")
+                    
+                    # Return only the requested number of records
+                    return combined_data.iloc[-limit:]
+                else:
+                    # If API fetch failed, return whatever we have in cache
+                    logger.warning(f"Failed to fetch additional data for {symbol}, using cached data only")
+                    return cached_data.iloc[-limit:]
+        
+        # Fetch data from API if cache is disabled or we need a refresh
+        data = self._fetch_from_api(symbol, timeframe, limit)
+        
+        # Cache the data if enabled
+        if self.use_cache and not data.empty:
+            # If we're forcing a refresh, update rather than overwrite
+            if force_refresh:
+                data = self.cache.update_ohlcv_cache(symbol, timeframe, data)
+            else:
+                self.cache.cache_ohlcv(symbol, timeframe, data)
+        
+        return data
+    
+    def _fetch_from_api(self, symbol, timeframe, limit):
+        """Fetch OHLCV data directly from the exchange API
+        
+        Args:
+            symbol: Trading pair symbol
+            timeframe: Timeframe
+            limit: Number of candles to fetch
+            
+        Returns:
+            DataFrame with OHLCV data
+        """
+        logger.debug(f"Fetching {symbol} from API ({timeframe}, limit={limit})")
+        try:
+            # Increase the limit slightly to account for potential missing data
+            api_limit = min(limit + 10, 1000)  # Most exchanges have a 1000 limit
+            
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=api_limit)
+            
+            if not ohlcv or len(ohlcv) == 0:
+                logger.warning(f"No data returned from API for {symbol} ({timeframe})")
+                return pd.DataFrame()
+            
+            # Create dataframe from response
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Log successful fetch
+            first_date = df.index[0].strftime('%Y-%m-%d')
+            last_date = df.index[-1].strftime('%Y-%m-%d')
+            logger.info(f"Successfully fetched {len(df)} records for {symbol} from API ({first_date} to {last_date})")
+            
+            return df
+        except ccxt.NetworkError as e:
+            logger.error(f"Network error while fetching {symbol} data: {e}")
+            logger.debug(traceback.format_exc())
+            return pd.DataFrame()
+        except ccxt.ExchangeError as e:
+            logger.error(f"Exchange error for {symbol}: {e}")
+            logger.debug(traceback.format_exc())
+            return pd.DataFrame()
+        except ccxt.InvalidSymbol:
+            logger.error(f"Invalid symbol: {symbol}")
+            return pd.DataFrame()
+        except ccxt.RequestTimeout:
+            logger.error(f"Request timeout while fetching {symbol} data")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Error fetching data for {symbol}: {e}")
+            logger.debug(traceback.format_exc())
+            return pd.DataFrame()
+    
+    def fetch_extended_history(self, symbol='BTC/USD', timeframe='1d', days=365):
+        """Fetch extended historical data, potentially making multiple API calls
+        
+        This method is useful for getting long-term historical data beyond
+        the exchange's single request limit.
+        
+        Args:
+            symbol: Trading pair symbol
+            timeframe: Timeframe
+            days: Number of days of history to retrieve
+            
+        Returns:
+            DataFrame with historical OHLCV data
+        """
+        logger.info(f"Fetching extended history for {symbol} ({timeframe}, {days} days)")
+        
+        # Try to get from cache first
+        if self.use_cache:
+            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe)
+            
+            if cached_data is not None and len(cached_data) >= days:
+                logger.info(f"Using cached extended history for {symbol}")
+                # Return the requested number of days
+                return cached_data.iloc[-days:]
+        
+        # Convert days to the number of candles needed based on timeframe
+        candles_per_day = {
+            '1m': 1440, '5m': 288, '15m': 96, '30m': 48, 
+            '1h': 24, '4h': 6, '6h': 4, '12h': 2, '1d': 1
+        }
+        
+        # Default to 1 if unknown timeframe
+        candles_per_day_value = candles_per_day.get(timeframe, 1)
+        total_candles = days * candles_per_day_value
+        
+        # Most exchanges limit to 1000 candles per request
+        max_per_request = 1000
+        
+        if total_candles <= max_per_request:
+            # We can fetch all data in one request
+            logger.debug(f"Fetching {total_candles} candles in a single request")
+            df = self._fetch_from_api(symbol, timeframe, total_candles)
+            
+            # Cache result
+            if self.use_cache and not df.empty:
+                self.cache.cache_ohlcv(symbol, timeframe, df)
+                
+            return df
+            
+        else:
+            # Need multiple requests - start with any cached data
+            logger.debug(f"Need multiple requests for {total_candles} candles")
+            result_df = pd.DataFrame()
+            
+            if self.use_cache:
+                cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=None)
+                if cached_data is not None and not cached_data.empty:
+                    result_df = cached_data.copy()
+                    logger.info(f"Starting with {len(result_df)} cached records")
+            
+            # Calculate how many more candles we need
+            candles_needed = total_candles - len(result_df)
+            
+            if candles_needed <= 0:
+                logger.info(f"No additional candles needed, using cached data")
+                return result_df.iloc[-total_candles:]
+            
+            # Make multiple requests as needed
+            remaining = candles_needed
+            max_attempts = 10  # Limit the number of requests to avoid rate limits
+            attempts = 0
+            
+            while remaining > 0 and attempts < max_attempts:
+                attempts += 1
+                batch_size = min(remaining, max_per_request)
+                
+                logger.info(f"Fetching batch {attempts}: {batch_size} candles")
+                
+                # If we have data, use the oldest timestamp to fetch older data
+                if not result_df.empty:
+                    # Get earliest timestamp and convert to milliseconds for the 'since' parameter
+                    earliest_ts = int(result_df.index[0].timestamp() * 1000)
+                    new_batch = self._fetch_from_api_with_since(symbol, timeframe, batch_size, since=earliest_ts - 1)
+                else:
+                    new_batch = self._fetch_from_api(symbol, timeframe, batch_size)
+                
+                if new_batch.empty:
+                    logger.warning(f"Failed to fetch batch {attempts}, stopping")
+                    break
+                
+                # Combine with existing data
+                result_df = pd.concat([new_batch, result_df])
+                result_df = result_df[~result_df.index.duplicated(keep='first')]
+                result_df = result_df.sort_index()
+                
+                logger.info(f"Combined data now has {len(result_df)} records")
+                
+                # Update remaining count
+                remaining = total_candles - len(result_df)
+                
+                # If we didn't get as many candles as requested, we've likely reached the limit
+                if len(new_batch) < batch_size:
+                    logger.info(f"Received fewer candles than requested ({len(new_batch)} < {batch_size}), assuming complete")
+                    break
+            
+            # Cache the final result
+            if self.use_cache and not result_df.empty:
+                self.cache.cache_ohlcv(symbol, timeframe, result_df)
+                
+            # Return only the requested number of days
+            return result_df.iloc[-total_candles:] if len(result_df) > total_candles else result_df
+    
+    def _fetch_from_api_with_since(self, symbol, timeframe, limit, since=None):
+        """Fetch OHLCV data from a specific timestamp
+        
+        Args:
+            symbol: Trading pair symbol
+            timeframe: Timeframe
+            limit: Number of candles to fetch
+            since: Timestamp (in milliseconds) to fetch from
+            
+        Returns:
+            DataFrame with OHLCV data
+        """
+        logger.debug(f"Fetching {symbol} from API with since={since}")
+        
+        try:
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+            
+            if not ohlcv or len(ohlcv) == 0:
+                logger.warning(f"No data returned from API for {symbol} with since={since}")
+                return pd.DataFrame()
+            
+            # Create dataframe from response
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Log successful fetch
+            first_date = df.index[0].strftime('%Y-%m-%d')
+            last_date = df.index[-1].strftime('%Y-%m-%d')
+            logger.info(f"Successfully fetched {len(df)} records for {symbol} from API ({first_date} to {last_date})")
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error fetching data for {symbol} with since={since}: {e}")
+            logger.debug(traceback.format_exc())
+            return pd.DataFrame()
+    
+    def fetch_market_data(self, symbols=['BTC/USD', 'ETH/USD'], timeframe='1d', days=30):
+        """Fetch market data for multiple symbols"""
+        logger.info(f"Fetching market data for {len(symbols)} symbols ({timeframe}, {days} days)")
+        
+        result = {}
+        with ErrorHandler(context="fetching multiple symbols data") as handler:
+            for symbol in symbols:
+                logger.debug(f"Processing symbol: {symbol}")
+                df = self.fetch_ohlcv(symbol, timeframe, limit=days)
+                if not df.empty:
+                    result[symbol] = df
+                else:
+                    logger.warning(f"No data available for {symbol}, skipping")
+        
+        logger.info(f"Successfully fetched data for {len(result)}/{len(symbols)} symbols")
+        return result
+        
+    def fetch_latest_ticker(self, symbol='BTC/USD'):
+        """Fetch the latest ticker information for a symbol"""
+        logger.info(f"Fetching latest ticker for {symbol}")
+        
+        try:
+            ticker = self.exchange.fetch_ticker(symbol)
+            logger.debug(f"Ticker data received for {symbol}")
+            
+            # Log the important metrics
+            logger.info(f"{symbol} last price: {ticker['last']}, 24h change: {ticker.get('percentage', 0):.2f}%")
+            
+            return ticker
+        except Exception as e:
+            logger.error(f"Failed to fetch ticker for {symbol}: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+            
+    def fetch_order_book(self, symbol='BTC/USD', limit=20):
+        """Fetch the current order book for a symbol"""
+        logger.info(f"Fetching order book for {symbol} (limit={limit})")
+        
+        try:
+            order_book = self.exchange.fetch_order_book(symbol, limit)
+            
+            # Log order book stats
+            top_bid = order_book['bids'][0][0] if order_book['bids'] else None
+            top_ask = order_book['asks'][0][0] if order_book['asks'] else None
+            
+            if top_bid and top_ask:
+                spread = (top_ask - top_bid) / top_bid * 100
+                logger.info(f"{symbol} order book - Top bid: {top_bid}, Top ask: {top_ask}, Spread: {spread:.3f}%")
+            else:
+                logger.warning(f"Incomplete order book data for {symbol}")
+            
+            return order_book
+        except Exception as e:
+            logger.error(f"Failed to fetch order book for {symbol}: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+
+--- .\quant_system\data\processors.py ---
+
+
+--- .\quant_system\data\storage.py ---
+
+
+--- .\quant_system\data\__init__.py ---
+
+
+--- .\quant_system\features\correlation.py ---
+
+
+--- .\quant_system\features\macro.py ---
+
+
+--- .\quant_system\features\technical.py ---
+# quant_system/features/technical.py
+import numpy as np
+import pandas as pd
+import ta
+import math
+from datetime import datetime, timedelta
+
+from quant_system.utils import get_logger
+
+# Initialize logger
+logger = get_logger("features.technical")
+
+class TechnicalFeatures:
+    """Generate technical indicators from price data"""
+    
+    @staticmethod
+    def add_indicators(df, required_periods=None):
+        """Add common technical indicators to a dataframe
+        
+        Adapts the indicators based on available data length.
+        
+        Args:
+            df: DataFrame with OHLCV data
+            required_periods: Optional list of periods to ensure are calculated
+            
+        Returns:
+            DataFrame with technical indicators added
+        """
+        if df.empty:
+            logger.warning("Cannot add indicators: Empty dataframe")
+            return df
+        
+        data_length = len(df)
+        logger.info(f"Adding technical indicators to dataframe with {data_length} rows")
+        
+        # Copy the dataframe to avoid modifying the original
+        df_indicators = df.copy()
+        
+        # Log the date range
+        start_date = df_indicators.index[0]
+        end_date = df_indicators.index[-1]
+        logger.debug(f"Data range: {start_date.date()} to {end_date.date()}")
+        
+        # Determine maximum reasonable periods based on data length
+        # Rule of thumb: Don't use MA periods > data_length/2
+        max_ma_period = min(200, math.floor(data_length/2))
+        
+        # If we have very limited data, adjust all periods proportionally
+        if data_length < 50:
+            logger.warning(f"Limited data available ({data_length} rows), scaling indicator periods")
+            scale_factor = data_length / 100  # Scale based on ideal 100+ data points
+        else:
+            scale_factor = 1.0
+            
+        logger.debug(f"Using max MA period of {max_ma_period}, scale factor {scale_factor:.2f}")
+        
+        # ---------- MOVING AVERAGES ----------
+        
+        # Add moving averages based on available data
+        ma_periods = [5, 10, 20, 50, 200]
+        ma_periods = [p for p in ma_periods if p <= max_ma_period]
+        
+        for period in ma_periods:
+            adjusted_period = max(2, int(period * scale_factor))
+            logger.debug(f"Calculating SMA with period {adjusted_period} (original: {period})")
+            
+            df_indicators[f'sma_{period}'] = ta.trend.sma_indicator(
+                df_indicators['close'], 
+                window=adjusted_period
+            )
+        
+        # ---------- MOMENTUM INDICATORS ----------
+        
+        # RSI (default 14, min 2)
+        rsi_period = max(2, int(14 * scale_factor))
+        logger.debug(f"Calculating RSI with period {rsi_period}")
+        df_indicators['rsi_14'] = ta.momentum.rsi(df_indicators['close'], window=rsi_period)
+        
+        # MACD (default 12/26/9)
+        # Adjust if we have limited data
+        if data_length >= 30:
+            fast_period = int(12 * scale_factor)
+            slow_period = int(26 * scale_factor)
+            signal_period = int(9 * scale_factor)
+            
+            # Ensure minimum values
+            fast_period = max(2, fast_period)
+            slow_period = max(fast_period + 1, slow_period)
+            signal_period = max(2, signal_period)
+            
+            logger.debug(f"Calculating MACD with periods {fast_period}/{slow_period}/{signal_period}")
+            
+            macd = ta.trend.MACD(
+                df_indicators['close'], 
+                window_fast=fast_period, 
+                window_slow=slow_period, 
+                window_sign=signal_period
+            )
+            df_indicators['macd'] = macd.macd()
+            df_indicators['macd_signal'] = macd.macd_signal()
+            df_indicators['macd_histogram'] = macd.macd_diff()
+        else:
+            logger.warning(f"Insufficient data for MACD calculation (need 30+, have {data_length})")
+        
+        # ---------- VOLATILITY INDICATORS ----------
+        
+        # Bollinger Bands (default 20, min 2)
+        bb_period = max(2, int(20 * scale_factor))
+        logger.debug(f"Calculating Bollinger Bands with period {bb_period}")
+        
+        bollinger = ta.volatility.BollingerBands(
+            df_indicators['close'], 
+            window=bb_period, 
+            window_dev=2
+        )
+        df_indicators['bb_upper'] = bollinger.bollinger_hband()
+        df_indicators['bb_lower'] = bollinger.bollinger_lband()
+        df_indicators['bb_middle'] = bollinger.bollinger_mavg()
+        df_indicators['bb_width'] = (df_indicators['bb_upper'] - df_indicators['bb_lower']) / df_indicators['bb_middle']
+        
+        # ATR (default 14, min 2)
+        atr_period = max(2, int(14 * scale_factor))
+        logger.debug(f"Calculating ATR with period {atr_period}")
+        
+        df_indicators['atr_14'] = ta.volatility.average_true_range(
+            df_indicators['high'], 
+            df_indicators['low'], 
+            df_indicators['close'], 
+            window=atr_period
+        )
+        
+        # Volatility (std dev of returns)
+        vol_period = max(2, int(20 * scale_factor))
+        logger.debug(f"Calculating volatility with period {vol_period}")
+        
+        df_indicators['volatility_20'] = df_indicators['close'].pct_change().rolling(vol_period).std() * np.sqrt(252 / periodicity_factor(df))
+        
+        # ---------- Z-SCORES & OSCILLATORS ----------
+        
+        # Z-score of price distance from MA (for short-term MAs only)
+        for period in [20, 50]:
+            if f'sma_{period}' in df_indicators.columns:
+                ma_col = f'sma_{period}'
+                z_col = f'z_score_ma_{period}'
+                
+                # Calculate z-score if we have enough data
+                if data_length >= period * 1.5:
+                    logger.debug(f"Calculating Z-score for {ma_col}")
+                    std_period = max(5, int(period / 2))
+                    df_indicators[z_col] = (df_indicators['close'] - df_indicators[ma_col]) / df_indicators['close'].rolling(std_period).std()
+        
+        # Stochastic Oscillator if we have enough data
+        if data_length >= 14:
+            stoch_period = max(5, int(14 * scale_factor))
+            stoch_smooth = max(3, int(3 * scale_factor))
+            
+            logger.debug(f"Calculating Stochastic Oscillator with periods {stoch_period}/{stoch_smooth}")
+            
+            stoch = ta.momentum.StochasticOscillator(
+                df_indicators['high'], 
+                df_indicators['low'], 
+                df_indicators['close'], 
+                window=stoch_period, 
+                smooth_window=stoch_smooth
+            )
+            df_indicators['stoch_k'] = stoch.stoch()
+            df_indicators['stoch_d'] = stoch.stoch_signal()
+        
+        # ---------- TREND INDICATORS ----------
+        
+        # ADX if we have enough data
+        if data_length >= 28:
+            adx_period = max(14, int(14 * scale_factor))
+            logger.debug(f"Calculating ADX with period {adx_period}")
+            
+            adx = ta.trend.ADXIndicator(
+                df_indicators['high'], 
+                df_indicators['low'], 
+                df_indicators['close'], 
+                window=adx_period
+            )
+            df_indicators['adx'] = adx.adx()
+            df_indicators['di_plus'] = adx.adx_pos()
+            df_indicators['di_minus'] = adx.adx_neg()
+        
+        # ---------- CUSTOM INDICATORS ----------
+        
+        # Calculate some basic stats about the data
+        df_indicators['returns_1d'] = df_indicators['close'].pct_change()
+        
+        # Calculate distance from recent highs/lows if we have enough data
+        if data_length >= 20:
+            logger.debug("Calculating high/low metrics")
+            df_indicators['dist_from_20d_high'] = df_indicators['close'] / df_indicators['high'].rolling(20).max() - 1
+            df_indicators['dist_from_20d_low'] = df_indicators['close'] / df_indicators['low'].rolling(20).min() - 1
+            
+            # Calculate days since last N-day high/low
+            for period in [20, 50]:
+                if data_length >= period:
+                    # Rolling max/min with expanding window method
+                    rolling_max = df_indicators['high'].rolling(period).max()
+                    rolling_min = df_indicators['low'].rolling(period).min()
+                    
+                    # Initialize counters
+                    days_since_high = np.zeros(len(df_indicators))
+                    days_since_low = np.zeros(len(df_indicators))
+                    
+                    # Calculate days since high/low
+                    for i in range(period, len(df_indicators)):
+                        if df_indicators['high'].iloc[i] >= rolling_max.iloc[i-1]:
+                            # New high
+                            days_since_high[i] = 0
+                        else:
+                            # Increment counter
+                            days_since_high[i] = days_since_high[i-1] + 1
+                            
+                        if df_indicators['low'].iloc[i] <= rolling_min.iloc[i-1]:
+                            # New low
+                            days_since_low[i] = 0
+                        else:
+                            # Increment counter
+                            days_since_low[i] = days_since_low[i-1] + 1
+                    
+                    df_indicators[f'days_since_{period}d_high'] = days_since_high
+                    df_indicators[f'days_since_{period}d_low'] = days_since_low
+        
+        # Log count of generated indicators
+        num_indicators = len(df_indicators.columns) - len(df.columns)
+        logger.info(f"Added {num_indicators} technical indicators")
+        
+        return df_indicators
+
+def periodicity_factor(df):
+    """Determine the periodicity factor for annualizing volatility
+    
+    Args:
+        df: DataFrame with datetime index
+        
+    Returns:
+        Factor to use for annualizing (252 for daily, 52 for weekly, etc.)
+    """
+    if len(df) < 2:
+        return 252  # Default to daily
+        
+    # Calculate average time delta between entries
+    deltas = []
+    for i in range(1, min(len(df), 10)):
+        delta = (df.index[i] - df.index[i-1]).total_seconds()
+        deltas.append(delta)
+    
+    avg_seconds = sum(deltas) / len(deltas)
+    
+    # Determine periodicity
+    if avg_seconds < 3600:  # Less than 1 hour
+        minutes = avg_seconds / 60
+        logger.debug(f"Detected {minutes:.1f} minute data")
+        return 252 * 6.5 * (60 / minutes)  # Assuming 6.5 trading hours
+    elif avg_seconds < 3600 * 24:  # Less than 1 day
+        hours = avg_seconds / 3600
+        logger.debug(f"Detected {hours:.1f} hour data")
+        return 252 * (24 / hours)
+    elif avg_seconds < 3600 * 24 * 7:  # Less than 1 week
+        days = avg_seconds / (3600 * 24)
+        logger.debug(f"Detected {days:.1f} day data")
+        return 252 / days
+    elif avg_seconds < 3600 * 24 * 30:  # Less than 1 month
+        weeks = avg_seconds / (3600 * 24 * 7)
+        logger.debug(f"Detected {weeks:.1f} week data")
+        return 52 / weeks
+    else:  # Monthly or longer
+        months = avg_seconds / (3600 * 24 * 30)
+        logger.debug(f"Detected {months:.1f} month data")
+        return 12 / months
+
+--- .\quant_system\features\__init__.py ---
+
+
+--- .\quant_system\interface\api.py ---
+# interface/api.py
+from fastapi import FastAPI, HTTPException, Query
+import pandas as pd
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+import os
+import sys
+import time
+import traceback
+
+# Add the project root to the path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import our system components
+from quant_system.data.connectors import CryptoDataConnector
+from quant_system.features.technical import TechnicalFeatures
+from quant_system.analysis.market_structure import MarketStructureAnalyzer
+from quant_system.analysis.backtest import MarketBacktester
+from quant_system.analysis.llm_interface import LLMAnalyzer
+from quant_system.utils import get_logger, ErrorHandler
+
+# Initialize logger for this module
+logger = get_logger("interface.api")
+
+app = FastAPI(
+    title="Quant System API",
+    description="API for interacting with the Quantitative Trading System",
+    version="0.1.0"
+)
+
+# Define request and response models
+class AnalysisRequest(BaseModel):
+    symbol: str = "BTC/USDT"
+    timeframe: str = "1d"
+    days: int = 365
+    include_raw_data: bool = False
+
+class AnalysisResponse(BaseModel):
+    symbol: str
+    conditions: List[str]
+    similar_instances: int
+    backtest_stats: Dict[str, float]
+    summary: str
+    raw_data: Optional[Dict[str, Any]] = None
+
+# Initialize system components
+logger.info("Initializing system components")
+try:
+    data_connector = CryptoDataConnector()
+    technical_features = TechnicalFeatures()
+    market_analyzer = MarketStructureAnalyzer()
+    backtester = MarketBacktester()
+    llm_analyzer = LLMAnalyzer(api_key=os.environ.get("LLM_API_KEY"))
+    logger.info("System components initialized successfully")
+except Exception as e:
+    logger.critical(f"Failed to initialize system components: {e}")
+    logger.debug(traceback.format_exc())
+    raise
+
+@app.get("/")
+def read_root():
+    logger.debug("Root endpoint accessed")
+    return {"message": "Welcome to the Quant System API"}
+
+@app.post("/analyze", response_model=AnalysisResponse)
+def analyze_market(request: AnalysisRequest):
+    """Run a complete market analysis for a given symbol"""
+    request_id = f"req_{int(time.time())}"
+    logger.info(f"[{request_id}] Market analysis requested for {request.symbol} on {request.timeframe} timeframe ({request.days} days)")
+    
+    with ErrorHandler(context=f"market analysis for {request.symbol}") as handler:
+        # 1. Fetch data
+        logger.debug(f"[{request_id}] Fetching market data")
+        market_data = data_connector.fetch_ohlcv(
+            symbol=request.symbol, 
+            timeframe=request.timeframe, 
+            limit=request.days
+        )
+        
+        if market_data.empty:
+            logger.warning(f"[{request_id}] No market data found for {request.symbol}")
+            raise HTTPException(status_code=404, detail="Could not fetch market data")
+        
+        logger.debug(f"[{request_id}] Retrieved {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}")
+        
+        # 2. Generate technical features
+        logger.debug(f"[{request_id}] Generating technical indicators")
+        df_indicators = technical_features.add_indicators(market_data)
+        
+        # 3. Identify current market conditions
+        logger.debug(f"[{request_id}] Identifying market conditions")
+        conditions = market_analyzer.identify_conditions(df_indicators)
+        logger.info(f"[{request_id}] Identified conditions: {', '.join(conditions)}")
+        
+        # 4. Find similar historical conditions and analyze performance
+        logger.debug(f"[{request_id}] Finding similar historical conditions")
+        similar_dates = backtester.find_similar_conditions(df_indicators, conditions)
+        logger.info(f"[{request_id}] Found {len(similar_dates)} similar historical instances")
+        
+        # 5. Calculate forward returns from similar conditions
+        logger.debug(f"[{request_id}] Calculating historical forward returns")
+        results_df, stats = backtester.analyze_forward_returns(df_indicators, similar_dates)
+        
+        # 6. Generate market summary with LLM
+        logger.debug(f"[{request_id}] Generating market summary with LLM")
+        summary = llm_analyzer.generate_market_summary(df_indicators, conditions, stats)
+        
+        # 7. Prepare response
+        logger.debug(f"[{request_id}] Preparing API response")
+        response = {
+            "symbol": request.symbol,
+            "conditions": conditions,
+            "similar_instances": len(similar_dates),
+            "backtest_stats": stats,
+            "summary": summary,
+            "raw_data": None
+        }
+        
+        # Include raw data if requested
+        if request.include_raw_data:
+            logger.debug(f"[{request_id}] Including raw data in response")
+            response["raw_data"] = {
+                "recent_data": df_indicators.tail(20).to_dict(),
+                "similar_instances": results_df.to_dict() if not results_df.empty else {}
+            }
+        
+        logger.info(f"[{request_id}] Analysis completed successfully")
+        return response
+
+@app.get("/symbols")
+def get_available_symbols():
+    """Get available trading pairs from the exchange"""
+    logger.info("Symbol list requested")
+    with ErrorHandler(context="fetching symbols list") as handler:
+        exchange = data_connector.exchange
+        markets = exchange.load_markets()
+        symbols = list(markets.keys())
+        logger.info(f"Retrieved {len(symbols)} symbols")
+        return {"symbols": symbols}
+
+@app.get("/timeframes")
+def get_available_timeframes():
+    """Get available timeframes from the exchange"""
+    logger.info("Timeframes list requested")
+    with ErrorHandler(context="fetching timeframes") as handler:
+        exchange = data_connector.exchange
+        timeframes = exchange.timeframes
+        logger.info(f"Retrieved {len(timeframes)} timeframes")
+        return {"timeframes": timeframes}
+
+@app.get("/conditions")
+def get_current_conditions(
+    symbol: str = Query("BTC/USDT", description="Trading pair symbol"),
+    timeframe: str = Query("1d", description="Timeframe for analysis")
+):
+    """Get current market conditions for a symbol"""
+    logger.info(f"Current conditions requested for {symbol} on {timeframe} timeframe")
+    with ErrorHandler(context=f"analyzing conditions for {symbol}") as handler:
+        # Fetch last 50 days of data
+        logger.debug(f"Fetching data for {symbol}")
+        market_data = data_connector.fetch_ohlcv(symbol, timeframe, limit=50)
+        
+        if market_data.empty:
+            logger.warning(f"No market data found for {symbol}")
+            raise HTTPException(status_code=404, detail="Could not fetch market data")
+        
+        # Generate indicators
+        logger.debug(f"Generating indicators for {symbol}")
+        df_indicators = technical_features.add_indicators(market_data)
+        
+        # Identify conditions
+        logger.debug(f"Identifying conditions for {symbol}")
+        conditions = market_analyzer.identify_conditions(df_indicators)
+        logger.info(f"Identified conditions for {symbol}: {', '.join(conditions)}")
+        
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "conditions": conditions,
+            "last_price": float(market_data.iloc[-1]['close']),
+            "last_update": market_data.index[-1].isoformat()
+        }
+
+@app.get("/backtest")
+def backtest_condition(
+    condition: List[str] = Query(..., description="Market conditions to backtest"),
+    symbol: str = Query("BTC/USDT", description="Trading pair symbol"),
+    timeframe: str = Query("1d", description="Timeframe for analysis"),
+    days: int = Query(365, description="Days of historical data to analyze")
+):
+    """Backtest specific market conditions"""
+    condition_str = ", ".join(condition)
+    logger.info(f"Backtest requested for conditions [{condition_str}] on {symbol} ({timeframe}, {days} days)")
+    
+    with ErrorHandler(context=f"backtesting {condition_str} on {symbol}") as handler:
+        # Fetch data
+        logger.debug(f"Fetching {days} days of data for {symbol}")
+        market_data = data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+        
+        if market_data.empty:
+            logger.warning(f"No market data found for {symbol}")
+            raise HTTPException(status_code=404, detail="Could not fetch market data")
+        
+        # Generate indicators
+        logger.debug(f"Generating indicators for {symbol}")
+        df_indicators = technical_features.add_indicators(market_data)
+        
+        # Find similar dates
+        logger.debug(f"Finding instances of conditions: {condition_str}")
+        similar_dates = backtester.find_similar_conditions(df_indicators, condition)
+        
+        if not similar_dates:
+            logger.info(f"No similar conditions found for {condition_str}")
+            return {
+                "symbol": symbol,
+                "conditions": condition,
+                "message": "No similar conditions found in the historical data"
+            }
+        
+        # Calculate forward returns
+        logger.debug(f"Calculating returns for {len(similar_dates)} similar instances")
+        results_df, stats = backtester.analyze_forward_returns(df_indicators, similar_dates)
+        
+        # Prepare simplified results
+        simplified_results = []
+        if not results_df.empty:
+            for _, row in results_df.iterrows():
+                simplified_results.append({
+                    "date": row["date"].isoformat(),
+                    "conditions": row["conditions"],
+                    "returns": {
+                        k: float(v) for k, v in row.items() 
+                        if k not in ["date", "conditions"] and not pd.isna(v)
+                    }
+                })
+        
+        logger.info(f"Backtest completed with {len(similar_dates)} instances")
+        return {
+            "symbol": symbol,
+            "conditions": condition,
+            "instances": len(similar_dates),
+            "stats": stats,
+            "examples": simplified_results[:10]  # Limit to first 10 examples
+        }
+
+# Run with: uvicorn interface.api:app --reload
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+--- .\quant_system\interface\cli.py ---
+# interface/cli.py
+import argparse
+import json
+import os
+import sys
+import traceback
+from typing import List, Dict, Any
+import pandas as pd
+
+# Add the project root to the path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import our system components
+from quant_system.data.connectors import CryptoDataConnector
+from quant_system.features.technical import TechnicalFeatures
+from quant_system.analysis.market_structure import MarketStructureAnalyzer
+from quant_system.analysis.backtest import MarketBacktester
+from quant_system.analysis.llm_interface import LLMAnalyzer
+from quant_system.utils import get_logger, ErrorHandler, set_log_level, DEBUG, INFO
+
+# Initialize logger for this module
+logger = get_logger("interface.cli")
+
+def pretty_print_json(data):
+    """Print JSON data in a human-readable format"""
+    print(json.dumps(data, indent=2))
+
+class QuantSystemCLI:
+    """Command-line interface for the Quant System"""
+    
+    def __init__(self):
+        logger.debug("Initializing CLI interface")
+        try:
+            self.data_connector = CryptoDataConnector()
+            self.technical_features = TechnicalFeatures()
+            self.market_analyzer = MarketStructureAnalyzer()
+            self.backtester = MarketBacktester()
+            self.llm = LLMAnalyzer(api_key=os.environ.get("LLM_API_KEY"))
+            logger.debug("CLI system components initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize CLI system components: {e}")
+            logger.debug(traceback.format_exc())
+            raise
+    
+    def analyze(self, symbol: str, timeframe: str, days: int):
+        """Run a complete market analysis"""
+        logger.info(f"Starting analysis of {symbol} on {timeframe} timeframe ({days} days)")
+        
+        with ErrorHandler(context=f"market analysis for {symbol}") as handler:
+            # 1. Fetch data
+            logger.debug(f"Fetching market data for {symbol}")
+            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch market data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            logger.info(f"Retrieved {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}")
+            
+            # 2. Generate technical features
+            logger.debug(f"Generating technical indicators for {symbol}")
+            df_indicators = self.technical_features.add_indicators(market_data)
+            
+            # 3. Identify current market conditions
+            logger.debug(f"Identifying market conditions for {symbol}")
+            conditions = self.market_analyzer.identify_conditions(df_indicators)
+            logger.info(f"Identified conditions for {symbol}: {', '.join(conditions)}")
+            
+            print("Current Market Conditions:")
+            for i, condition in enumerate(conditions, 1):
+                print(f"  {i}. {condition}")
+            print()
+            
+            # 4. Find similar historical conditions and analyze performance
+            logger.debug(f"Finding similar historical conditions for {symbol}")
+            similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
+            
+            if not similar_dates:
+                logger.info(f"No similar historical conditions found for {symbol}")
+                print("No similar historical conditions found in the specified period.")
+                return 0
+            
+            logger.info(f"Found {len(similar_dates)} similar historical instances for {symbol}")
+            print(f"Found {len(similar_dates)} similar historical instances")
+            print("Recent examples:")
+            for date, matched_conditions in similar_dates[-3:]:
+                print(f"  {date.date()}: {', '.join(matched_conditions)}")
+            print()
+            
+            # 5. Calculate forward returns from similar conditions
+            logger.debug(f"Calculating forward returns for {symbol}")
+            results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
+            
+            print("Historical Forward Returns (after similar conditions):")
+            for period, value in stats.items():
+                if 'mean' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day forward return (avg): {value:.2f}%")
+                    print(f"  {days}-day forward return (avg): {value:.2f}%")
+                if 'positive_pct' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day win rate: {value:.2f}%")
+                    print(f"  {days}-day win rate: {value:.2f}%")
+            print()
+            
+            # 6. Generate market summary with LLM
+            if os.environ.get("LLM_API_KEY"):
+                logger.debug(f"Generating LLM market analysis for {symbol}")
+                print("Generating market analysis with LLM...")
+                summary = self.llm.generate_market_summary(df_indicators, conditions, stats)
+                logger.info(f"LLM analysis generated for {symbol}")
+                print("\nLLM Analysis:")
+                print(summary)
+            else:
+                logger.warning("LLM analysis skipped (no API key provided)")
+                print("\nLLM Analysis skipped (no API key provided)")
+        
+        logger.info(f"Analysis of {symbol} completed successfully")
+        return 0
+    
+    def list_symbols(self):
+        """List available trading pairs"""
+        logger.info("Listing available trading symbols")
+        with ErrorHandler(context="fetching symbol list") as handler:
+            exchange = self.data_connector.exchange
+            markets = exchange.load_markets()
+            symbols = list(markets.keys())
+            
+            logger.info(f"Retrieved {len(symbols)} symbols from {exchange.name}")
+            print(f"Available symbols on {exchange.name}:")
+            
+            # Group by base currency
+            by_base = {}
+            for symbol in symbols:
+                parts = symbol.split('/')
+                if len(parts) == 2:
+                    base = parts[0]
+                    if base not in by_base:
+                        by_base[base] = []
+                    by_base[base].append(symbol)
+            
+            # Print major currencies first
+            major_currencies = ['BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'SOL']
+            for currency in major_currencies:
+                if currency in by_base:
+                    pairs = by_base[currency]
+                    logger.debug(f"Displaying {currency} pairs ({len(pairs)} total)")
+                    print(f"  {currency}: {', '.join(pairs[:5])}{'...' if len(pairs) > 5 else ''}")
+                    del by_base[currency]
+            
+            # Print remaining currencies
+            for currency, pairs in list(by_base.items())[:10]:  # Limit to avoid too much output
+                print(f"  {currency}: {', '.join(pairs[:5])}{'...' if len(pairs) > 5 else ''}")
+            
+            if len(by_base) > 10:
+                logger.debug(f"Omitted {len(by_base) - 10} base currencies from display")
+                print(f"  ... and {len(by_base) - 10} more base currencies")
+            
+            logger.info("Symbol list displayed successfully")
+            return 0
+    
+    def list_timeframes(self):
+        """List available timeframes"""
+        logger.info("Listing available timeframes")
+        with ErrorHandler(context="fetching timeframes") as handler:
+            exchange = self.data_connector.exchange
+            timeframes = exchange.timeframes
+            
+            logger.info(f"Retrieved {len(timeframes)} timeframes from {exchange.name}")
+            print(f"Available timeframes on {exchange.name}:")
+            for tf, description in timeframes.items():
+                print(f"  {tf}: {description}")
+            
+            logger.info("Timeframes displayed successfully")
+            return 0
+    
+    def backtest(self, conditions: List[str], symbol: str, timeframe: str, days: int):
+        """Backtest specific market conditions"""
+        condition_str = ", ".join(conditions)
+        print(f"Backtesting conditions: {condition_str}")
+        print(f"Symbol: {symbol}, Timeframe: {timeframe}, Data period: {days} days\n")
+        
+        logger.info(f"Starting backtest for conditions [{condition_str}] on {symbol} ({timeframe}, {days} days)")
+        
+        with ErrorHandler(context=f"backtesting {condition_str} on {symbol}") as handler:
+            # 1. Fetch data
+            logger.debug(f"Fetching {days} days of data for {symbol}")
+            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch market data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            logger.info(f"Retrieved {len(market_data)} candles for {symbol}")
+            
+            # 2. Generate technical features
+            logger.debug(f"Generating technical indicators for {symbol}")
+            df_indicators = self.technical_features.add_indicators(market_data)
+            
+            # 3. Find similar dates
+            logger.debug(f"Finding instances of conditions: {condition_str}")
+            similar_dates = self.backtester.find_similar_conditions(df_indicators, conditions)
+            
+            if not similar_dates:
+                logger.info(f"No instances of conditions [{condition_str}] found in historical data")
+                print("No instances of these conditions found in the historical data.")
+                return 0
+            
+            logger.info(f"Found {len(similar_dates)} instances of conditions [{condition_str}]")
+            print(f"Found {len(similar_dates)} instances of specified conditions")
+            
+            # 4. Calculate forward returns
+            logger.debug(f"Calculating returns for {len(similar_dates)} similar instances")
+            results_df, stats = self.backtester.analyze_forward_returns(df_indicators, similar_dates)
+            
+            print("\nHistorical Forward Returns:")
+            for period, value in stats.items():
+                if 'mean' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day forward return (avg): {value:.2f}%")
+                    print(f"  {days}-day forward return (avg): {value:.2f}%")
+                if 'positive_pct' in period:
+                    days = period.split('d_')[0]
+                    logger.info(f"{days}-day win rate: {value:.2f}%")
+                    print(f"  {days}-day win rate: {value:.2f}%")
+            
+            if not results_df.empty:
+                logger.debug("Displaying most recent occurrences")
+                print("\nMost Recent Occurrences:")
+                recent = results_df.sort_values('date', ascending=False).head(5)
+                for _, row in recent.iterrows():
+                    date = row['date'].date()
+                    conditions_str = ', '.join(row['conditions'])
+                    returns = [f"{days}d: {row[f'{days}d_return']:.2f}%" 
+                               for days in [1, 5, 10, 20] 
+                               if f"{days}d_return" in row and not pd.isna(row[f"{days}d_return"])]
+                    
+                    print(f"  {date} - {conditions_str}")
+                    print(f"    Returns: {', '.join(returns)}")
+            
+            logger.info(f"Backtest for conditions [{condition_str}] completed successfully")
+            return 0
+            
+    def fetch_history(self, symbol: str, timeframe: str, from_date: str, to_date: str = None, output: str = None):
+        """Fetch complete historical data using pagination
+        
+        Args:
+            symbol: Trading pair to fetch
+            timeframe: Timeframe to fetch
+            from_date: Start date in YYYY-MM-DD format
+            to_date: End date in YYYY-MM-DD format (defaults to current date)
+            output: Output file path for CSV export
+        """
+        print(f"Fetching complete historical data for {symbol}")
+        print(f"Timeframe: {timeframe}")
+        print(f"Period: {from_date} to {to_date or 'now'}\n")
+        
+        logger.info(f"Starting historical data fetch for {symbol} ({timeframe}) from {from_date} to {to_date or 'now'}")
+        
+        with ErrorHandler(context=f"fetching historical data for {symbol}") as handler:
+            # Add time component if not provided
+            if from_date and len(from_date) == 10:  # YYYY-MM-DD format
+                from_date = f"{from_date} 00:00:00"
+            if to_date and len(to_date) == 10:  # YYYY-MM-DD format
+                to_date = f"{to_date} 23:59:59"
+                
+            # Fetch data with pagination
+            market_data = self.data_connector.fetch_paginated_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                from_datetime=from_date,
+                to_datetime=to_date
+            )
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch historical data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            # Print data statistics
+            print(f"Successfully retrieved {len(market_data)} candles")
+            print(f"Time range: {market_data.index[0]} to {market_data.index[-1]}")
+            
+            # Print sample of the data
+            print("\nData Sample (latest 5 candles):")
+            pd.set_option('display.precision', 2)
+            print(market_data.tail(5).to_string())
+            
+            # Save to CSV if requested
+            if output:
+                try:
+                    # Create directory if it doesn't exist
+                    output_dir = os.path.dirname(output)
+                    if output_dir:
+                        os.makedirs(output_dir, exist_ok=True)
+                    
+                    # Save to CSV
+                    market_data.to_csv(output)
+                    logger.info(f"Saved historical data to {output}")
+                    print(f"\nData successfully saved to {output}")
+                except Exception as e:
+                    logger.error(f"Failed to save data to {output}: {e}")
+                    print(f"Error saving data: {e}")
+            
+            logger.info(f"Historical data fetch completed successfully for {symbol} ({len(market_data)} records)")
+            return 0
+
+def main():
+    """Main entry point for the CLI"""
+    parser = argparse.ArgumentParser(description="Quant System CLI")
+    
+    # Add global debug flag that applies to all commands
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    
+    # Analyze command
+    analyze_parser = subparsers.add_parser("analyze", help="Analyze a market")
+    analyze_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
+    analyze_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
+    analyze_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
+    
+    # List symbols command
+    list_symbols_parser = subparsers.add_parser("symbols", help="List available trading pairs")
+    
+    # List timeframes command
+    list_timeframes_parser = subparsers.add_parser("timeframes", help="List available timeframes")
+    
+    # Backtest command
+    backtest_parser = subparsers.add_parser("backtest", help="Backtest market conditions")
+    backtest_parser.add_argument("--conditions", "-c", required=True, nargs="+", help="Market conditions to backtest")
+    backtest_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
+    backtest_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
+    backtest_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
+    
+    # Fetch historical data command
+    history_parser = subparsers.add_parser("history", help="Fetch complete historical data")
+    history_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to fetch")
+    history_parser.add_argument("--timeframe", "-t", default="1d", help="Data timeframe")
+    history_parser.add_argument("--from", dest="from_date", required=True, help="Start date (YYYY-MM-DD)")
+    history_parser.add_argument("--to", dest="to_date", help="End date (YYYY-MM-DD), defaults to now")
+    history_parser.add_argument("--output", "-o", help="Output file path (CSV)")
+    
+    # Ensure we don't error on empty args
+    if len(sys.argv) <= 1:
+        parser.print_help()
+        return 0
+    
+    # Parse the arguments
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # If argument parsing fails, show help and exit with error code
+        parser.print_help()
+        return e.code
+    
+    # Set debug logging if requested
+    if args.debug:
+        set_log_level(DEBUG)
+        logger.debug("Debug logging enabled in CLI")
+    
+    logger.info(f"Starting CLI with command: {args.command or 'help'}")
+    
+    try:
+        cli = QuantSystemCLI()
+        
+        # Execute the command
+        if args.command == "analyze":
+            return cli.analyze(args.symbol, args.timeframe, args.days)
+        elif args.command == "symbols":
+            return cli.list_symbols()
+        elif args.command == "timeframes":
+            return cli.list_timeframes()
+        elif args.command == "backtest":
+            return cli.backtest(args.conditions, args.symbol, args.timeframe, args.days)
+        elif args.command == "history":
+            return cli.fetch_history(args.symbol, args.timeframe, args.from_date, args.to_date, args.output)
+        else:
+            logger.info("No command specified, showing help")
+            parser.print_help()
+            return 0
+    except Exception as e:
+        logger.critical(f"Unhandled exception in CLI: {str(e)}")
+        logger.debug(traceback.format_exc())
+        print(f"Error: {str(e)}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+--- .\quant_system\interface\__init__.py ---
+
+
+--- .\quant_system\models\evaluation.py ---
+
+
+--- .\quant_system\models\prediction.py ---
+
+
+--- .\quant_system\models\__init__.py ---
+
+

@@ -10,12 +10,8 @@ from quant_system.utils import logger, set_log_level, DEBUG, INFO, ErrorHandler
 logger.info("Loading environment variables from .env file")
 load_dotenv()
 
-def start_api(host="0.0.0.0", port=8000, reload=False, debug=False):
+def start_api(host="0.0.0.0", port=8000, reload=False):
     """Start the FastAPI server"""
-    if debug:
-        set_log_level(DEBUG)
-        logger.debug("Debug logging enabled for API")
-    
     logger.info(f"Starting API server on {host}:{port} (reload={reload})")
     try:
         uvicorn.run("quant_system.interface.api:app", host=host, port=port, reload=reload)
@@ -23,12 +19,16 @@ def start_api(host="0.0.0.0", port=8000, reload=False, debug=False):
         logger.error(f"Failed to start API server: {e}")
         raise
 
-def start_cli():
+def start_cli(debug=False):
     """Start the command-line interface"""
     logger.info("Starting CLI interface")
     try:
-        # Import and run the CLI directly, letting it handle its own arguments
         from quant_system.interface.cli import main
+        
+        # If debug mode is enabled in the main script, ensure it's passed to CLI
+        if debug and '--debug' not in sys.argv:
+            sys.argv.append('--debug')
+            
         main()
     except Exception as e:
         logger.error(f"Failed to start CLI interface: {e}")
@@ -36,8 +36,6 @@ def start_cli():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Quant System")
-    
-    # Top level command
     subparsers = parser.add_subparsers(dest="mode", help="Run mode")
     
     # API mode
@@ -45,32 +43,29 @@ if __name__ == "__main__":
     api_parser.add_argument("--host", default="0.0.0.0", help="API host")
     api_parser.add_argument("--port", "-p", type=int, default=8000, help="API port")
     api_parser.add_argument("--reload", "-r", action="store_true", help="Enable auto-reload")
-    api_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
-    # CLI mode - we'll pass all args to the CLI parser
+    # CLI mode - forward all remaining arguments to the CLI
     cli_parser = subparsers.add_parser("cli", help="Run command-line interface")
     
-    # If no args or just help flag, show help
-    if len(sys.argv) <= 1 or (len(sys.argv) == 2 and sys.argv[1] in ['-h', '--help']):
-        parser.print_help()
-        sys.exit(0)
+    # Add common arguments
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
-    # Handle the case where we want to run the CLI with arguments
-    if len(sys.argv) > 1 and sys.argv[1] == 'cli':
-        # Remove 'main.py' and 'cli' from the args, as we're going to pass control
-        # directly to the CLI module
-        sys.argv = [sys.argv[0]] + sys.argv[2:]
-        start_cli()
-        sys.exit(0)
+    args, remaining = parser.parse_known_args()
     
-    # For API mode, parse arguments normally
-    args = parser.parse_args()
+    # Set logging level based on arguments
+    if hasattr(args, 'debug') and args.debug:
+        set_log_level(DEBUG)
+        logger.debug("Debug logging enabled")
     
-    logger.info(f"Starting Quant System in {args.mode} mode")
+    logger.info(f"Starting Quant System in {args.mode or 'help'} mode")
     
     with ErrorHandler(context="main execution", exit_on_error=True):
         if args.mode == "api":
-            start_api(args.host, args.port, args.reload, args.debug)
+            start_api(args.host, args.port, args.reload)
+        elif args.mode == "cli":
+            # Pass remaining arguments to CLI
+            sys.argv = [sys.argv[0]] + remaining
+            start_cli(debug=args.debug)
         else:
+            logger.info("No mode specified, showing help")
             parser.print_help()
-            sys.exit(1)
