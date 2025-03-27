@@ -8,7 +8,7 @@ Many cryptocurrency exchanges and financial data APIs limit the amount of histor
 
 ## Implementation Details
 
-The implementation is in the `fetch_paginated_ohlcv` method of the `CryptoDataConnector` class in `quant_system/data/connectors.py`.
+The implementation is in the `fetch_market_data` method of the `CryptoDataConnector` class in `quant_system/data/connectors.py`.
 
 ### Key Features
 
@@ -17,6 +17,7 @@ The implementation is in the `fetch_paginated_ohlcv` method of the `CryptoDataCo
 3. **Error Handling**: Graceful handling of API errors with retries
 4. **Timestamp Management**: Properly handles pagination boundaries to avoid duplicates
 5. **Data Filtering**: Ensures only data within the requested time range is returned
+6. **Indicator Calculation**: Optionally calculates and caches technical indicators
 
 ### How It Works
 
@@ -38,62 +39,11 @@ The pagination algorithm follows these steps:
 ### Code Example
 
 ```python
-def fetch_paginated_ohlcv(self, symbol='BTC/USD', timeframe='1d', 
-                         from_datetime=None, to_datetime=None, retry_delay=30):
-    """Fetch complete OHLCV data for a given period using pagination"""
-    
-    # Convert dates to timestamps
-    from_timestamp = self._convert_to_timestamp(from_datetime)
-    to_timestamp = self._convert_to_timestamp(to_datetime, default_to_now=True)
-    
-    # Check cache first
-    if self.use_cache:
-        cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=None)
-        if cached_data is not None and not cached_data.empty:
-            # Filter to the requested time range
-            # Return if complete data exists in cache
-            pass
-    
-    # Fetch data with pagination
-    all_ohlcv = []
-    current_timestamp = from_timestamp
-    
-    while current_timestamp < to_timestamp:
-        try:
-            # Fetch a batch of candles
-            ohlcvs = self.exchange.fetch_ohlcv(symbol, timeframe, since=current_timestamp)
-            
-            # Add to result set
-            all_ohlcv.extend(ohlcvs)
-            
-            # Update timestamp for next iteration
-            if len(ohlcvs) > 0:
-                current_timestamp = ohlcvs[-1][0] + 1
-            else:
-                # Handle empty response
-                break
-                
-        except Exception as e:
-            # Handle errors and retry
-            pass
-    
-    # Convert to DataFrame
-    if all_ohlcv:
-        df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        
-        # Remove duplicates and sort
-        df = df[~df.index.duplicated(keep='first')]
-        df = df.sort_index()
-        
-        # Update cache
-        if self.use_cache:
-            self.cache.update_ohlcv_cache(symbol, timeframe, df)
-        
-        return df
-    else:
-        return pd.DataFrame()
+def fetch_market_data(self, symbol='BTC/USD', timeframe='1d', limit=None, 
+                     from_date=None, to_date=None, add_indicators=False,
+                     force_refresh=False, csv_output=None, retry_delay=30):
+    """Unified market data fetching function that handles caching, pagination and indicators"""
+    # Implementation details...
 ```
 
 ## Usage in CLI
@@ -115,11 +65,12 @@ from quant_system.data.connectors import CryptoDataConnector
 connector = CryptoDataConnector(use_cache=True)
 
 # Fetch complete history since 2018
-data = connector.fetch_paginated_ohlcv(
+data = connector.fetch_market_data(
     symbol="BTC/USD",
     timeframe="1d",
-    from_datetime="2018-01-01",
-    to_datetime=None  # Defaults to current time
+    from_date="2018-01-01",
+    to_date=None,  # Defaults to current time
+    add_indicators=True
 )
 
 # Process or analyze the data

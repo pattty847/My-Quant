@@ -4,36 +4,21 @@ This document provides reference examples of key functions and code patterns use
 
 ## Data Fetching
 
-### Paginated OHLCV Data Fetching
+### Unified Market Data Fetching
 
-The system can fetch complete historical data using pagination, allowing for retrieval of large datasets that exceed the exchange's single request limit.
+The system can fetch complete historical data using the unified `fetch_market_data` function, allowing for retrieval of large datasets that exceed the exchange's single request limit.
 
 ```python
 # Example: Fetching complete BTC/USD history from 2019 to present
 from quant_system.data.connectors import CryptoDataConnector
 
 data_connector = CryptoDataConnector(use_cache=True)
-historical_data = data_connector.fetch_paginated_ohlcv(
+historical_data = data_connector.fetch_market_data(
     symbol="BTC/USD",
     timeframe="1d",
-    from_datetime="2019-01-01",
-    to_datetime="2023-01-01"
-)
-```
-
-### Regular OHLCV Data Fetching
-
-For fetching the most recent data with a specific limit:
-
-```python
-# Example: Fetching the most recent 100 candles
-from quant_system.data.connectors import CryptoDataConnector
-
-data_connector = CryptoDataConnector(use_cache=True)
-market_data = data_connector.fetch_ohlcv(
-    symbol="ETH/USDT",
-    timeframe="4h",
-    limit=100
+    from_date="2019-01-01",
+    to_date="2023-01-01",
+    add_indicators=True
 )
 ```
 
