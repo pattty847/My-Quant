@@ -50,168 +50,6 @@ class CryptoDataConnector:
             logger.debug(traceback.format_exc())
             raise
     
-    def fetch_paginated_ohlcv(self, symbol='BTC/USD', timeframe='1d', 
-                              from_datetime=None, to_datetime=None, retry_delay=30):
-        """Fetch complete OHLCV data for a given period using pagination
-        
-        Args:
-            symbol: Trading pair symbol (e.g., 'BTC/USD')
-            timeframe: Timeframe (e.g., '1d', '1h')
-            from_datetime: Start datetime as string 'YYYY-MM-DD HH:MM:SS' or datetime object
-            to_datetime: End datetime as string 'YYYY-MM-DD HH:MM:SS' or datetime object
-            retry_delay: Delay in seconds before retrying on error
-            
-        Returns:
-            DataFrame with OHLCV data
-        """
-        logger.info(f"Fetching paginated OHLCV data for {symbol} ({timeframe}) from {from_datetime} to {to_datetime}")
-        
-        # Convert string datetimes to timestamp if provided
-        if from_datetime is not None:
-            if isinstance(from_datetime, str):
-                # Add time component if missing
-                if len(from_datetime) == 10:  # YYYY-MM-DD format
-                    from_datetime = f"{from_datetime} 00:00:00"
-                from_timestamp = self.exchange.parse8601(from_datetime)
-                if from_timestamp is None:
-                    logger.error(f"Could not parse from_datetime: {from_datetime}")
-                    from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
-            elif isinstance(from_datetime, datetime):
-                from_timestamp = int(from_datetime.timestamp() * 1000)
-            else:
-                from_timestamp = from_datetime  # Assume it's already a timestamp
-        else:
-            # Default to 1 year ago if not specified
-            from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
-            
-        # Set end timestamp
-        if to_datetime is not None:
-            if isinstance(to_datetime, str):
-                # Add time component if missing
-                if len(to_datetime) == 10:  # YYYY-MM-DD format
-                    to_datetime = f"{to_datetime} 23:59:59"
-                to_timestamp = self.exchange.parse8601(to_datetime)
-                if to_timestamp is None:
-                    logger.error(f"Could not parse to_datetime: {to_datetime}")
-                    to_timestamp = int(datetime.now().timestamp() * 1000)
-            elif isinstance(to_datetime, datetime):
-                to_timestamp = int(to_datetime.timestamp() * 1000)
-            else:
-                to_timestamp = to_datetime  # Assume it's already a timestamp
-        else:
-            to_timestamp = int(datetime.now().timestamp() * 1000)
-            
-        logger.debug(f"Timestamp range: {from_timestamp} to {to_timestamp}")
-        
-        # First, check if we already have this data in the standard cache
-        if self.use_cache:
-            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=None)
-            
-            if cached_data is not None and not cached_data.empty:
-                logger.info(f"Found existing cached data for {symbol} ({len(cached_data)} records)")
-                
-                # Filter to the requested time range
-                from_dt = datetime.fromtimestamp(from_timestamp / 1000)
-                to_dt = datetime.fromtimestamp(to_timestamp / 1000)
-                filtered_data = cached_data[
-                    (cached_data.index >= from_dt) & 
-                    (cached_data.index <= to_dt)
-                ]
-                
-                # Check if we have complete data for the requested range
-                if len(filtered_data) > 0:
-                    has_start = filtered_data.index.min() <= from_dt
-                    has_end = filtered_data.index.max() >= to_dt
-                    
-                    if has_start and has_end:
-                        logger.info(f"Complete data found in cache for requested time range ({len(filtered_data)} records)")
-                        return filtered_data
-                    
-                    # If we have partial data, we could fetch just what's missing
-                    # But for simplicity, we'll fetch everything and merge with existing cache
-            
-        # Fetch data with pagination
-        all_ohlcv = []
-        current_timestamp = from_timestamp
-        
-        while current_timestamp < to_timestamp:
-            try:
-                logger.debug(f"Fetching candles from {self.exchange.iso8601(current_timestamp)}")
-                ohlcvs = self.exchange.fetch_ohlcv(symbol, timeframe, since=current_timestamp)
-                
-                if not ohlcvs or len(ohlcvs) == 0:
-                    logger.warning(f"No data returned at timestamp {current_timestamp}, stopping pagination")
-                    break
-                    
-                logger.debug(f"Fetched {len(ohlcvs)} candles")
-                
-                # Filter out any data beyond our end timestamp
-                ohlcvs = [candle for candle in ohlcvs if candle[0] <= to_timestamp]
-                
-                # Add to our result set
-                all_ohlcv.extend(ohlcvs)
-                
-                # Update timestamp for next iteration based on last candle
-                if len(ohlcvs) > 0:
-                    # Move timestamp forward by 1ms to avoid duplicates
-                    current_timestamp = ohlcvs[-1][0] + 1
-                else:
-                    # If we got an empty response but didn't break earlier, move forward in time
-                    timeframe_ms = self._timeframe_to_milliseconds(timeframe)
-                    current_timestamp += timeframe_ms * 100  # Skip ahead 100 candles
-                
-                # If we got fewer candles than expected, we might be at the end
-                if len(ohlcvs) < 100:  # Most exchanges return max 100-1000 candles per request
-                    logger.debug("Received fewer candles than expected, may have reached the end")
-                    # Only break if we actually got some candles, otherwise continue
-                    if len(ohlcvs) > 0:
-                        break
-            
-            except (ccxt.ExchangeError, ccxt.AuthenticationError,
-                   ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as error:
-                error_msg = f"Error fetching data: {type(error).__name__}, {error.args}"
-                logger.error(error_msg)
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                
-                # Wait before retrying
-                time.sleep(retry_delay)
-            
-            except Exception as e:
-                logger.error(f"Unexpected error fetching paginated data: {e}")
-                logger.debug(traceback.format_exc())
-                break
-        
-        # Convert to DataFrame
-        if all_ohlcv:
-            df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            # Remove duplicates that might occur at pagination boundaries
-            df = df[~df.index.duplicated(keep='first')]
-            df = df.sort_index()
-            
-            logger.info(f"Successfully fetched {len(df)} records from {df.index[0]} to {df.index[-1]}")
-            
-            # Update the standard OHLCV cache
-            if self.use_cache:
-                logger.debug(f"Updating standard OHLCV cache for {symbol}")
-                combined_df = self.cache.update_ohlcv_cache(symbol, timeframe, df)
-                
-                # Return only the requested time range
-                from_dt = datetime.fromtimestamp(from_timestamp / 1000)
-                to_dt = datetime.fromtimestamp(to_timestamp / 1000)
-                result_df = combined_df[
-                    (combined_df.index >= from_dt) & 
-                    (combined_df.index <= to_dt)
-                ]
-                return result_df
-            
-            return df
-        else:
-            logger.warning(f"No data fetched for {symbol} in the specified time range")
-            return pd.DataFrame()
-    
     def _timeframe_to_milliseconds(self, timeframe):
         """Convert a timeframe string to milliseconds"""
         unit = timeframe[-1]
@@ -228,82 +66,6 @@ class CryptoDataConnector:
         else:
             logger.warning(f"Unknown timeframe unit: {unit}, defaulting to days")
             return value * 24 * 60 * 60 * 1000
-    
-    def fetch_ohlcv(self, symbol='BTC/USD', timeframe='1d', limit=100, force_refresh=False):
-        """Fetch OHLCV data for a given symbol, with caching
-        
-        Args:
-            symbol: Trading pair symbol (e.g., 'BTC/USD')
-            timeframe: Timeframe (e.g., '1d', '1h')
-            limit: Number of candles to fetch
-            force_refresh: Whether to ignore cache and fetch new data
-            
-        Returns:
-            DataFrame with OHLCV data
-        """
-        logger.info(f"Fetching OHLCV data for {symbol} ({timeframe}, limit={limit})")
-        
-        # Try to get data from cache if enabled and not forcing refresh
-        if self.use_cache and not force_refresh:
-            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe)
-            
-            if cached_data is not None and len(cached_data) >= limit:
-                logger.info(f"Using cached data for {symbol} ({len(cached_data)} records)")
-                
-                # Check if we need to update the latest candle
-                latest_candle = cached_data.iloc[-1]
-                latest_candle_time = latest_candle.name
-                current_time = pd.Timestamp.now()
-                
-                # Calculate the timeframe in minutes
-                timeframe_minutes = self._timeframe_to_minutes(timeframe)
-                
-                # If the latest candle is from the current period, we should update it
-                if (current_time - latest_candle_time).total_seconds() < timeframe_minutes * 60:
-                    logger.info(f"Latest candle is from current period, updating...")
-                    # Fetch just the latest candle to update
-                    new_data = self._fetch_from_api(symbol, timeframe, limit=1)
-                    if not new_data.empty:
-                        # Update the latest candle in cache
-                        cached_data.iloc[-1] = new_data.iloc[-1]
-                        self.cache.cache_ohlcv(symbol, timeframe, cached_data)
-                
-                return cached_data.iloc[-limit:]
-            
-            elif cached_data is not None:
-                logger.info(f"Cached data insufficient ({len(cached_data)} < {limit} records), fetching additional data")
-                
-                # Calculate how many additional records we need
-                # Add some buffer to account for potential gaps
-                additional_limit = limit - len(cached_data) + 10
-                
-                # Fetch additional data and merge with cache
-                new_data = self._fetch_from_api(symbol, timeframe, additional_limit)
-                
-                if not new_data.empty:
-                    # Update cache with new data
-                    combined_data = self.cache.update_ohlcv_cache(symbol, timeframe, new_data)
-                    logger.info(f"Combined data has {len(combined_data)} records")
-                    
-                    # Return only the requested number of records
-                    return combined_data.iloc[-limit:]
-                else:
-                    # If API fetch failed, return whatever we have in cache
-                    logger.warning(f"Failed to fetch additional data for {symbol}, using cached data only")
-                    return cached_data.iloc[-limit:]
-        
-        # Fetch data from API if cache is disabled or we need a refresh
-        data = self._fetch_from_api(symbol, timeframe, limit)
-        
-        # Cache the data if enabled
-        if self.use_cache and not data.empty:
-            # If we're forcing a refresh, update rather than overwrite
-            if force_refresh:
-                data = self.cache.update_ohlcv_cache(symbol, timeframe, data)
-            else:
-                self.cache.cache_ohlcv(symbol, timeframe, data)
-        
-        return data
     
     def _timeframe_to_minutes(self, timeframe):
         """Convert a timeframe string to minutes"""
@@ -322,223 +84,317 @@ class CryptoDataConnector:
             logger.warning(f"Unknown timeframe unit: {unit}, defaulting to days")
             return value * 24 * 60
     
-    def _fetch_from_api(self, symbol, timeframe, limit):
-        """Fetch OHLCV data directly from the exchange API
-        
-        Args:
-            symbol: Trading pair symbol
-            timeframe: Timeframe
-            limit: Number of candles to fetch
-            
-        Returns:
-            DataFrame with OHLCV data
-        """
-        logger.debug(f"Fetching {symbol} from API ({timeframe}, limit={limit})")
-        try:
-            # Increase the limit slightly to account for potential missing data
-            api_limit = min(limit + 10, 1000)  # Most exchanges have a 1000 limit
-            
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=api_limit)
-            
-            if not ohlcv or len(ohlcv) == 0:
-                logger.warning(f"No data returned from API for {symbol} ({timeframe})")
-                return pd.DataFrame()
-            
-            # Create dataframe from response
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            # Log successful fetch
-            first_date = df.index[0].strftime('%Y-%m-%d')
-            last_date = df.index[-1].strftime('%Y-%m-%d')
-            logger.info(f"Successfully fetched {len(df)} records for {symbol} from API ({first_date} to {last_date})")
-            
-            return df
-        except ccxt.NetworkError as e:
-            logger.error(f"Network error while fetching {symbol} data: {e}")
-            logger.debug(traceback.format_exc())
-            return pd.DataFrame()
-        except ccxt.ExchangeError as e:
-            logger.error(f"Exchange error for {symbol}: {e}")
-            logger.debug(traceback.format_exc())
-            return pd.DataFrame()
-        except ccxt.InvalidSymbol:
-            logger.error(f"Invalid symbol: {symbol}")
-            return pd.DataFrame()
-        except ccxt.RequestTimeout:
-            logger.error(f"Request timeout while fetching {symbol} data")
-            return pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Error fetching data for {symbol}: {e}")
-            logger.debug(traceback.format_exc())
-            return pd.DataFrame()
-    
     def fetch_extended_history(self, symbol='BTC/USD', timeframe='1d', days=365):
-        """Fetch extended historical data, potentially making multiple API calls
+        """
+        DEPRECATED: Use fetch_market_data instead.
+        This method remains for backward compatibility only.
+        """
+        logger.warning("fetch_extended_history is deprecated, use fetch_market_data instead")
         
-        This method is useful for getting long-term historical data beyond
-        the exchange's single request limit.
+        # Calculate a date range going back 'days' from today
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=days)
+        
+        # Use the unified function
+        return self.fetch_market_data(
+            symbol=symbol, 
+            timeframe=timeframe, 
+            from_date=from_date,
+            to_date=to_date
+        )
+    
+    def fetch_market_data(self, symbol='BTC/USD', timeframe='1d', limit=None, 
+                         from_date=None, to_date=None, add_indicators=False,
+                         force_refresh=False, csv_output=None, retry_delay=30):
+        """Unified market data fetching function that handles caching, pagination and indicators
         
         Args:
             symbol: Trading pair symbol
-            timeframe: Timeframe
-            days: Number of days of history to retrieve
+            timeframe: Candle timeframe
+            limit: Optional number of candles to return (most recent)
+            from_date: Optional start date as string 'YYYY-MM-DD' or datetime object
+            to_date: Optional end date as string 'YYYY-MM-DD' or datetime object
+            add_indicators: Whether to calculate and cache technical indicators
+            force_refresh: Whether to force fetch from API ignoring cache
+            csv_output: Optional path to save data as CSV
+            retry_delay: Delay in seconds before retrying on error
             
         Returns:
-            DataFrame with historical OHLCV data
+            DataFrame with OHLCV data and optional indicators
         """
-        logger.info(f"Fetching extended history for {symbol} ({timeframe}, {days} days)")
+        market_data = None
         
-        # Try to get from cache first
-        if self.use_cache:
-            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe)
-            
-            if cached_data is not None and len(cached_data) >= days:
-                logger.info(f"Using cached extended history for {symbol}")
-                # Return the requested number of days
-                return cached_data.iloc[-days:]
+        # 1. Determine what we need to fetch
+        logger.info(f"Fetching market data for {symbol} ({timeframe})")
         
-        # Convert days to the number of candles needed based on timeframe
-        candles_per_day = {
-            '1m': 1440, '5m': 288, '15m': 96, '30m': 48, 
-            '1h': 24, '4h': 6, '6h': 4, '12h': 2, '1d': 1
-        }
+        # Convert date strings to timestamps if provided
+        from_timestamp = None
+        to_timestamp = None
         
-        # Default to 1 if unknown timeframe
-        candles_per_day_value = candles_per_day.get(timeframe, 1)
-        total_candles = days * candles_per_day_value
-        
-        # Most exchanges limit to 1000 candles per request
-        max_per_request = 1000
-        
-        if total_candles <= max_per_request:
-            # We can fetch all data in one request
-            logger.debug(f"Fetching {total_candles} candles in a single request")
-            df = self._fetch_from_api(symbol, timeframe, total_candles)
-            
-            # Cache result
-            if self.use_cache and not df.empty:
-                self.cache.cache_ohlcv(symbol, timeframe, df)
+        if from_date is not None:
+            if isinstance(from_date, str):
+                # Add time component if missing
+                if len(from_date) == 10:  # YYYY-MM-DD format
+                    from_date = f"{from_date} 00:00:00"
+                from_timestamp = self.exchange.parse8601(from_date)
+                if from_timestamp is None:
+                    logger.error(f"Could not parse from_date: {from_date}")
+                    from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
+            elif isinstance(from_date, datetime):
+                from_timestamp = int(from_date.timestamp() * 1000)
+            else:
+                from_timestamp = from_date  # Assume it's already a timestamp
                 
-            return df
+        if to_date is not None:
+            if isinstance(to_date, str):
+                # Add time component if missing
+                if len(to_date) == 10:  # YYYY-MM-DD format
+                    to_date = f"{to_date} 23:59:59"
+                to_timestamp = self.exchange.parse8601(to_date)
+                if to_timestamp is None:
+                    logger.error(f"Could not parse to_date: {to_date}")
+                    to_timestamp = int(datetime.now().timestamp() * 1000)
+            elif isinstance(to_date, datetime):
+                to_timestamp = int(to_date.timestamp() * 1000)
+            else:
+                to_timestamp = to_date  # Assume it's already a timestamp
+        
+        # 2. Check cache if enabled and not forcing refresh
+        if self.use_cache and not force_refresh:
+            cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=1)
             
-        else:
-            # Need multiple requests - start with any cached data
-            logger.debug(f"Need multiple requests for {total_candles} candles")
-            result_df = pd.DataFrame()
+            if cached_data is not None and not cached_data.empty:
+                logger.info(f"Found cached data for {symbol} ({len(cached_data)} records)")
+                
+                # If we have date range, filter the cached data
+                if from_timestamp or to_timestamp:
+                    if from_timestamp:
+                        from_dt = datetime.fromtimestamp(from_timestamp / 1000)
+                        cached_data = cached_data[cached_data.index >= from_dt]
+                    if to_timestamp:
+                        to_dt = datetime.fromtimestamp(to_timestamp / 1000)
+                        cached_data = cached_data[cached_data.index <= to_dt]
+                    
+                    logger.debug(f"Filtered cached data to {len(cached_data)} records")
+                
+                # If we have limit, return only that many recent records
+                if limit and len(cached_data) >= limit:
+                    market_data = cached_data.iloc[-limit:]
+                    logger.info(f"Using {len(market_data)} records from cache (limit={limit})")
+                else:
+                    # We have complete cached data for the request
+                    market_data = cached_data
+                
+                # Check if we need to update with the latest data
+                if market_data is not None:
+                    # Check if the latest candle is from the current period
+                    latest_candle_time = market_data.index[-1]
+                    current_time = datetime.now()
+                    
+                    # Calculate the timeframe in minutes
+                    timeframe_minutes = self._timeframe_to_minutes(timeframe)
+                    
+                    seconds_since_last_candle = (current_time - latest_candle_time).total_seconds()
+                    
+                    # If the latest candle is older than one candle period but less than two periods,
+                    # we might need a new candle
+                    if timeframe_minutes * 60 < seconds_since_last_candle < timeframe_minutes * 60 * 2:
+                        logger.info(f"Checking for newer data since {latest_candle_time}")
+                        
+                        try:
+                            new_candles = self.exchange.fetch_ohlcv(symbol, timeframe, limit=2)
+                            if new_candles and len(new_candles) > 0:
+                                newest_timestamp = new_candles[-1][0]
+                                newest_dt = datetime.fromtimestamp(newest_timestamp / 1000)
+                                
+                                if newest_dt > latest_candle_time:
+                                    logger.info(f"Found newer data, updating cache with candle from {newest_dt}")
+                                    new_df = pd.DataFrame(new_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                                    new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+                                    new_df.set_index('timestamp', inplace=True)
+                                    
+                                    # Add to cache
+                                    updated_cache = pd.concat([cached_data, new_df])
+                                    updated_cache = updated_cache[~updated_cache.index.duplicated(keep='last')]
+                                    updated_cache = updated_cache.sort_index()
+                                    
+                                    # Update the cache
+                                    self.cache.cache_ohlcv(symbol, timeframe, updated_cache)
+                                    
+                                    # Update our result
+                                    if limit and len(updated_cache) >= limit:
+                                        market_data = updated_cache.iloc[-limit:]
+                                    else:
+                                        market_data = updated_cache
+                        except Exception as e:
+                            logger.warning(f"Error checking for newer data: {e}")
+        
+        # 3. If we don't have complete data from cache, fetch from exchange
+        if market_data is None or (
+            (from_timestamp and market_data.index.min() > datetime.fromtimestamp(from_timestamp / 1000)) or
+            (to_timestamp and market_data.index.max() < datetime.fromtimestamp(to_timestamp / 1000))
+        ):
+            logger.info("Need to fetch data from exchange")
+            all_ohlcv = []
             
+            # Determine if we need pagination
+            need_pagination = from_timestamp is not None or limit is None or limit > 1000
+            
+            if need_pagination:
+                # Use pagination to fetch all data
+                logger.info("Using pagination to fetch complete data")
+                
+                # Start from the earliest timestamp we need
+                current_timestamp = from_timestamp
+                if current_timestamp is None:
+                    # Default to 1 year ago if not specified
+                    current_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
+                
+                # End at the latest timestamp we need
+                end_timestamp = to_timestamp
+                if end_timestamp is None:
+                    end_timestamp = int(datetime.now().timestamp() * 1000)
+                
+                while current_timestamp < end_timestamp:
+                    try:
+                        logger.debug(f"Fetching candles from {self.exchange.iso8601(current_timestamp)}")
+                        # Most exchanges limit to 1000 candles per request
+                        ohlcvs = self.exchange.fetch_ohlcv(symbol, timeframe, since=current_timestamp, limit=1000)
+                        
+                        if not ohlcvs or len(ohlcvs) == 0:
+                            logger.warning(f"No data returned at timestamp {current_timestamp}, stopping pagination")
+                            break
+                            
+                        logger.debug(f"Fetched {len(ohlcvs)} candles")
+                        
+                        # Filter out any data beyond our end timestamp
+                        if to_timestamp:
+                            ohlcvs = [candle for candle in ohlcvs if candle[0] <= to_timestamp]
+                        
+                        # Add to our result set
+                        all_ohlcv.extend(ohlcvs)
+                        
+                        # Update timestamp for next iteration based on last candle
+                        if len(ohlcvs) > 0:
+                            # Move timestamp forward by 1ms to avoid duplicates
+                            current_timestamp = ohlcvs[-1][0] + 1
+                        else:
+                            # If we got an empty response but didn't break earlier, move forward in time
+                            timeframe_ms = self._timeframe_to_milliseconds(timeframe)
+                            current_timestamp += timeframe_ms * 100  # Skip ahead 100 candles
+                        
+                        # If we got fewer candles than expected, we might be at the end
+                        if len(ohlcvs) < 1000:  # Most exchanges return max 1000 candles per request
+                            logger.debug("Received fewer candles than expected, may have reached the end")
+                            # Only break if we actually got some candles, otherwise continue
+                            if len(ohlcvs) > 0:
+                                break
+                    
+                    except (ccxt.ExchangeError, ccxt.AuthenticationError,
+                           ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as error:
+                        error_msg = f"Error fetching data: {type(error).__name__}, {error.args}"
+                        logger.error(error_msg)
+                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        
+                        # Wait before retrying
+                        time.sleep(retry_delay)
+                    
+                    except Exception as e:
+                        logger.error(f"Unexpected error fetching paginated data: {e}")
+                        logger.debug(traceback.format_exc())
+                        break
+            else:
+                # Simple fetch with limit
+                try:
+                    logger.info(f"Fetching {limit} most recent candles")
+                    ohlcvs = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                    all_ohlcv = ohlcvs
+                except Exception as e:
+                    logger.error(f"Error fetching data: {e}")
+                    logger.debug(traceback.format_exc())
+            
+            # Convert to DataFrame
+            if all_ohlcv:
+                df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                # Remove duplicates that might occur at pagination boundaries
+                df = df[~df.index.duplicated(keep='first')]
+                df = df.sort_index()
+                
+                logger.info(f"Successfully fetched {len(df)} records from {df.index[0]} to {df.index[-1]}")
+                
+                # Merge with cached data if we have any
+                if market_data is not None:
+                    logger.info("Merging new data with cached data")
+                    combined_df = pd.concat([market_data, df])
+                    combined_df = combined_df[~combined_df.index.duplicated(keep='last')]  # Keep newer versions
+                    combined_df = combined_df.sort_index()
+                    
+                    # Update the result
+                    if limit and len(combined_df) > limit:
+                        market_data = combined_df.iloc[-limit:]
+                    else:
+                        market_data = combined_df
+                else:
+                    # Use the fetched data directly
+                    if limit and len(df) > limit:
+                        market_data = df.iloc[-limit:]
+                    else:
+                        market_data = df
+                
+                # Update the cache
+                if self.use_cache:
+                    logger.debug(f"Updating OHLCV cache for {symbol}")
+                    self.cache.update_ohlcv_cache(symbol, timeframe, df)
+            else:
+                # No data fetched, use whatever we had from cache
+                logger.warning(f"No data fetched from exchange for {symbol}")
+                if market_data is None:
+                    logger.warning("No data available at all")
+                    market_data = pd.DataFrame()
+        
+        # 4. If we have data but not indicators, and indicators were requested, calculate them
+        if add_indicators and not market_data.empty:
+            logger.info(f"Calculating technical indicators for {len(market_data)} candles")
+            
+            # Import here to avoid circular imports
+            from quant_system.features.technical import TechnicalFeatures
+            
+            # Initialize with the same cache but force recalculation
+            tech = TechnicalFeatures(cache=self.cache)
+            
+            # Force recalculation of indicators for the full dataset
+            # First, calculate all indicators without going through cache
+            df_indicators = tech._calculate_indicators(market_data)
+            
+            # Then update the cache with the new indicators
             if self.use_cache:
-                cached_data = self.cache.get_cached_ohlcv(symbol, timeframe, max_age_days=None)
-                if cached_data is not None and not cached_data.empty:
-                    result_df = cached_data.copy()
-                    logger.info(f"Starting with {len(result_df)} cached records")
+                logger.info(f"Updating indicators cache with {len(df_indicators)} records")
+                self.cache.cache_indicators(symbol, timeframe, df_indicators)
             
-            # Calculate how many more candles we need
-            candles_needed = total_candles - len(result_df)
+            # Use the newly calculated indicators
+            market_data = df_indicators
             
-            if candles_needed <= 0:
-                logger.info(f"No additional candles needed, using cached data")
-                return result_df.iloc[-total_candles:]
-            
-            # Make multiple requests as needed
-            remaining = candles_needed
-            max_attempts = 10  # Limit the number of requests to avoid rate limits
-            attempts = 0
-            
-            while remaining > 0 and attempts < max_attempts:
-                attempts += 1
-                batch_size = min(remaining, max_per_request)
-                
-                logger.info(f"Fetching batch {attempts}: {batch_size} candles")
-                
-                # If we have data, use the oldest timestamp to fetch older data
-                if not result_df.empty:
-                    # Get earliest timestamp and convert to milliseconds for the 'since' parameter
-                    earliest_ts = int(result_df.index[0].timestamp() * 1000)
-                    new_batch = self._fetch_from_api_with_since(symbol, timeframe, batch_size, since=earliest_ts - 1)
-                else:
-                    new_batch = self._fetch_from_api(symbol, timeframe, batch_size)
-                
-                if new_batch.empty:
-                    logger.warning(f"Failed to fetch batch {attempts}, stopping")
-                    break
-                
-                # Combine with existing data
-                result_df = pd.concat([new_batch, result_df])
-                result_df = result_df[~result_df.index.duplicated(keep='first')]
-                result_df = result_df.sort_index()
-                
-                logger.info(f"Combined data now has {len(result_df)} records")
-                
-                # Update remaining count
-                remaining = total_candles - len(result_df)
-                
-                # If we didn't get as many candles as requested, we've likely reached the limit
-                if len(new_batch) < batch_size:
-                    logger.info(f"Received fewer candles than requested ({len(new_batch)} < {batch_size}), assuming complete")
-                    break
-            
-            # Cache the final result
-            if self.use_cache and not result_df.empty:
-                self.cache.cache_ohlcv(symbol, timeframe, result_df)
-                
-            # Return only the requested number of days
-            return result_df.iloc[-total_candles:] if len(result_df) > total_candles else result_df
-    
-    def _fetch_from_api_with_since(self, symbol, timeframe, limit, since=None):
-        """Fetch OHLCV data from a specific timestamp
+            logger.info(f"Added indicators to market data ({len(market_data.columns) - 5} indicators)")
         
-        Args:
-            symbol: Trading pair symbol
-            timeframe: Timeframe
-            limit: Number of candles to fetch
-            since: Timestamp (in milliseconds) to fetch from
-            
-        Returns:
-            DataFrame with OHLCV data
-        """
-        logger.debug(f"Fetching {symbol} from API with since={since}")
+        # 5. Export to CSV if requested
+        if csv_output and not market_data.empty:
+            try:
+                logger.info(f"Saving market data to {csv_output}")
+                
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(os.path.abspath(csv_output)), exist_ok=True)
+                
+                # Save to CSV
+                market_data.to_csv(csv_output)
+                logger.info(f"Successfully saved {len(market_data)} records to {csv_output}")
+            except Exception as e:
+                logger.error(f"Failed to save data to {csv_output}: {e}")
+                logger.debug(traceback.format_exc())
         
-        try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
-            
-            if not ohlcv or len(ohlcv) == 0:
-                logger.warning(f"No data returned from API for {symbol} with since={since}")
-                return pd.DataFrame()
-            
-            # Create dataframe from response
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            
-            # Log successful fetch
-            first_date = df.index[0].strftime('%Y-%m-%d')
-            last_date = df.index[-1].strftime('%Y-%m-%d')
-            logger.info(f"Successfully fetched {len(df)} records for {symbol} from API ({first_date} to {last_date})")
-            
-            return df
-        except Exception as e:
-            logger.error(f"Error fetching data for {symbol} with since={since}: {e}")
-            logger.debug(traceback.format_exc())
-            return pd.DataFrame()
-    
-    def fetch_market_data(self, symbols=['BTC/USD', 'ETH/USD'], timeframe='1d', days=30):
-        """Fetch market data for multiple symbols"""
-        logger.info(f"Fetching market data for {len(symbols)} symbols ({timeframe}, {days} days)")
-        
-        result = {}
-        with ErrorHandler(context="fetching multiple symbols data") as handler:
-            for symbol in symbols:
-                logger.debug(f"Processing symbol: {symbol}")
-                df = self.fetch_ohlcv(symbol, timeframe, limit=days)
-                if not df.empty:
-                    result[symbol] = df
-                else:
-                    logger.warning(f"No data available for {symbol}, skipping")
-        
-        logger.info(f"Successfully fetched data for {len(result)}/{len(symbols)} symbols")
-        return result
+        return market_data
         
     def fetch_latest_ticker(self, symbol='BTC/USD'):
         """Fetch the latest ticker information for a symbol"""
@@ -579,3 +435,41 @@ class CryptoDataConnector:
             logger.error(f"Failed to fetch order book for {symbol}: {e}")
             logger.debug(traceback.format_exc())
             return None
+
+    def fetch_multiple_symbols(self, symbols=['BTC/USD', 'ETH/USD'], timeframe='1d', limit=100, 
+                            from_date=None, to_date=None, add_indicators=False):
+        """Fetch market data for multiple symbols
+        
+        Args:
+            symbols: List of trading pair symbols
+            timeframe: Candle timeframe
+            limit: Optional number of candles to return (most recent)
+            from_date: Optional start date
+            to_date: Optional end date
+            add_indicators: Whether to calculate and cache technical indicators
+            
+        Returns:
+            Dictionary of symbol -> DataFrame with market data
+        """
+        logger.info(f"Fetching market data for {len(symbols)} symbols ({timeframe})")
+        
+        result = {}
+        with ErrorHandler(context="fetching multiple symbols data") as handler:
+            for symbol in symbols:
+                logger.debug(f"Processing symbol: {symbol}")
+                df = self.fetch_market_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    limit=limit,
+                    from_date=from_date,
+                    to_date=to_date,
+                    add_indicators=add_indicators
+                )
+                
+                if not df.empty:
+                    result[symbol] = df
+                else:
+                    logger.warning(f"No data available for {symbol}, skipping")
+        
+        logger.info(f"Successfully fetched data for {len(result)}/{len(symbols)} symbols")
+        return result

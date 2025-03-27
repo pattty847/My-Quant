@@ -6,6 +6,7 @@ import sys
 import traceback
 from typing import List, Dict, Any
 import pandas as pd
+import time
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,7 +33,7 @@ class QuantSystemCLI:
         logger.debug("Initializing CLI interface")
         try:
             self.data_connector = CryptoDataConnector()
-            self.technical_features = TechnicalFeatures()
+            self.technical_features = TechnicalFeatures(cache=self.data_connector.cache)
             self.market_analyzer = MarketStructureAnalyzer()
             self.backtester = MarketBacktester()
             self.llm = LLMAnalyzer(api_key=os.environ.get("LLM_API_KEY"))
@@ -44,12 +45,17 @@ class QuantSystemCLI:
     
     def analyze(self, symbol: str, timeframe: str, days: int):
         """Run a complete market analysis"""
+        print(f"Analyzing {symbol} on {timeframe} timeframe using {days} days of data...\n")
         logger.info(f"Starting analysis of {symbol} on {timeframe} timeframe ({days} days)")
         
         with ErrorHandler(context=f"market analysis for {symbol}") as handler:
             # 1. Fetch data
             logger.debug(f"Fetching market data for {symbol}")
-            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            market_data = self.data_connector.fetch_market_data(
+                symbol=symbol, 
+                timeframe=timeframe, 
+                limit=days
+            )
             
             if market_data.empty:
                 error_msg = f"Could not fetch market data for {symbol}"
@@ -61,7 +67,7 @@ class QuantSystemCLI:
             
             # 2. Generate technical features
             logger.debug(f"Generating technical indicators for {symbol}")
-            df_indicators = self.technical_features.add_indicators(market_data)
+            df_indicators = self.technical_features.add_indicators(market_data, symbol, timeframe)
             
             # 3. Identify current market conditions
             logger.debug(f"Identifying market conditions for {symbol}")
@@ -187,7 +193,11 @@ class QuantSystemCLI:
         with ErrorHandler(context=f"backtesting {condition_str} on {symbol}") as handler:
             # 1. Fetch data
             logger.debug(f"Fetching {days} days of data for {symbol}")
-            market_data = self.data_connector.fetch_ohlcv(symbol, timeframe, limit=days)
+            market_data = self.data_connector.fetch_market_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=days
+            )
             
             if market_data.empty:
                 error_msg = f"Could not fetch market data for {symbol}"
@@ -199,7 +209,7 @@ class QuantSystemCLI:
             
             # 2. Generate technical features
             logger.debug(f"Generating technical indicators for {symbol}")
-            df_indicators = self.technical_features.add_indicators(market_data)
+            df_indicators = self.technical_features.add_indicators(market_data, symbol, timeframe)
             
             # 3. Find similar dates
             logger.debug(f"Finding instances of conditions: {condition_str}")
@@ -245,8 +255,9 @@ class QuantSystemCLI:
             logger.info(f"Backtest for conditions [{condition_str}] completed successfully")
             return 0
             
-    def fetch_history(self, symbol: str, timeframe: str, from_date: str, to_date: str = None, output: str = None):
-        """Fetch complete historical data using pagination
+    def fetch_history(self, symbol: str, timeframe: str, from_date: str, to_date: str = None, 
+                       output: str = None, add_indicators: bool = False):
+        """Fetch complete historical data
         
         Args:
             symbol: Trading pair to fetch
@@ -254,26 +265,39 @@ class QuantSystemCLI:
             from_date: Start date in YYYY-MM-DD format
             to_date: End date in YYYY-MM-DD format (defaults to current date)
             output: Output file path for CSV export
+            add_indicators: Whether to calculate and cache technical indicators
         """
         print(f"Fetching complete historical data for {symbol}")
         print(f"Timeframe: {timeframe}")
-        print(f"Period: {from_date} to {to_date or 'now'}\n")
+        print(f"Period: {from_date} to {to_date or 'now'}")
+        if add_indicators:
+            print("Technical indicators will be calculated\n")
+        else:
+            print()
         
         logger.info(f"Starting historical data fetch for {symbol} ({timeframe}) from {from_date} to {to_date or 'now'}")
         
         with ErrorHandler(context=f"fetching historical data for {symbol}") as handler:
-            # Add time component if not provided
-            if from_date and len(from_date) == 10:  # YYYY-MM-DD format
-                from_date = f"{from_date} 00:00:00"
-            if to_date and len(to_date) == 10:  # YYYY-MM-DD format
-                to_date = f"{to_date} 23:59:59"
+            # Handle output paths based on type of data being saved
+            formatted_symbol = symbol.replace('/', '_')
+            
+            # Determine OHLCV output path
+            ohlcv_output = output
+            if output is None:
+                ohlcv_output = f"{self.data_connector.cache.cache_dir}/{formatted_symbol}_{timeframe}_ohlcv.csv"
+                logger.info(f"Using default output filename: {ohlcv_output}")
                 
-            # Fetch data with pagination
-            market_data = self.data_connector.fetch_paginated_ohlcv(
+            # Determine path for indicators file (for informational purposes)
+            indicator_path = f"{self.data_connector.cache.indicators_dir}/{formatted_symbol}_{timeframe}_indicators.csv"
+            
+            # Fetch data with the unified function
+            market_data = self.data_connector.fetch_market_data(
                 symbol=symbol,
                 timeframe=timeframe,
-                from_datetime=from_date,
-                to_datetime=to_date
+                from_date=from_date,
+                to_date=to_date,
+                add_indicators=add_indicators,
+                csv_output=ohlcv_output if not add_indicators else None  # Only pass output path for OHLCV data
             )
             
             if market_data.empty:
@@ -286,26 +310,19 @@ class QuantSystemCLI:
             print(f"Successfully retrieved {len(market_data)} candles")
             print(f"Time range: {market_data.index[0]} to {market_data.index[-1]}")
             
+            if add_indicators:
+                indicator_count = len(market_data.columns) - 5  # Subtract OHLCV columns
+                print(f"Generated {indicator_count} technical indicators")
+                print(f"\nIndicators saved to {indicator_path}")
+            else:
+                print(f"\nData successfully saved to {ohlcv_output}")
+            
             # Print sample of the data
             print("\nData Sample (latest 5 candles):")
             pd.set_option('display.precision', 2)
+            pd.set_option('display.max_columns', 10 if add_indicators else 5)  # Limit columns for readability
+            pd.set_option('display.width', 120)
             print(market_data.tail(5).to_string())
-            
-            # Save to CSV if requested
-            if output:
-                try:
-                    # Create directory if it doesn't exist
-                    output_dir = os.path.dirname(output)
-                    if output_dir:
-                        os.makedirs(output_dir, exist_ok=True)
-                    
-                    # Save to CSV
-                    market_data.to_csv(output)
-                    logger.info(f"Saved historical data to {output}")
-                    print(f"\nData successfully saved to {output}")
-                except Exception as e:
-                    logger.error(f"Failed to save data to {output}: {e}")
-                    print(f"Error saving data: {e}")
             
             logger.info(f"Historical data fetch completed successfully for {symbol} ({len(market_data)} records)")
             return 0
@@ -345,6 +362,7 @@ def main():
     history_parser.add_argument("--from", dest="from_date", required=True, help="Start date (YYYY-MM-DD)")
     history_parser.add_argument("--to", dest="to_date", help="End date (YYYY-MM-DD), defaults to now")
     history_parser.add_argument("--output", "-o", help="Output file path (CSV)")
+    history_parser.add_argument("--indicators", "-i", action="store_true", help="Calculate and cache technical indicators")
     
     # Ensure we don't error on empty args
     if len(sys.argv) <= 1:
@@ -379,7 +397,7 @@ def main():
         elif args.command == "backtest":
             return cli.backtest(args.conditions, args.symbol, args.timeframe, args.days)
         elif args.command == "history":
-            return cli.fetch_history(args.symbol, args.timeframe, args.from_date, args.to_date, args.output)
+            return cli.fetch_history(args.symbol, args.timeframe, args.from_date, args.to_date, args.output, args.indicators)
         else:
             logger.info("No command specified, showing help")
             parser.print_help()
