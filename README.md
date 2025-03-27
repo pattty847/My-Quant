@@ -2,6 +2,9 @@
 
 This guide will help you set up and start using the Quant System for market analysis.
 
+![kmeans_regimes_time_20250327_164930](https://github.com/user-attachments/assets/f25cf161-37bd-4ee2-bf1c-bb03cd1e4adc)
+![pca_scatter_20250327_164920](https://github.com/user-attachments/assets/a5fdf14d-c6c4-4b29-ac43-5eb17bc6ede4)
+
 ## Prerequisites
 
 - Python 3.8+
