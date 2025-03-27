@@ -51,8 +51,9 @@ class TechnicalFeatures:
                     latest_cached = cached_indicators.index[-1]
                     latest_price = df.index[-1]
                     if latest_cached == latest_price:
-                        # Update the latest candle's indicators
-                        new_indicators = self._calculate_indicators(df.iloc[-1:], required_periods)
+                        # Update the latest candle's indicators using the last 50 rows for proper calculation
+                        update_window = min(50, len(df))
+                        new_indicators = self._calculate_indicators(df.iloc[-update_window:], required_periods)
                         cached_indicators.iloc[-1] = new_indicators.iloc[-1]
                         self.cache.cache_indicators(symbol, timeframe, cached_indicators)
                 return cached_indicators

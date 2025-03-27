@@ -7,6 +7,7 @@ import traceback
 from typing import List, Dict, Any
 import pandas as pd
 import time
+from datetime import datetime, timedelta
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,7 @@ from quant_system.features.technical import TechnicalFeatures
 from quant_system.analysis.market_structure import MarketStructureAnalyzer
 from quant_system.analysis.backtest import MarketBacktester
 from quant_system.analysis.llm_interface import LLMAnalyzer
+from quant_system.analysis.advanced_models import run_models, DimensionalityReducer, RegimeDetector
 from quant_system.utils import get_logger, ErrorHandler, set_log_level, DEBUG, INFO
 
 # Initialize logger for this module
@@ -124,6 +126,153 @@ class QuantSystemCLI:
                 print("\nLLM Analysis skipped (no API key provided)")
         
         logger.info(f"Analysis of {symbol} completed successfully")
+        return 0
+    
+    def analyze_advanced(self, symbol: str, timeframe: str, days: int, output_dir: str = None, 
+                         n_components: int = 2, n_regimes: int = 3, force_refresh: bool = False):
+        """Run advanced statistical analysis (PCA & HMM)"""
+        print(f"Running advanced analysis for {symbol} on {timeframe} timeframe using {days} days of data...")
+        print(f"PCA components: {n_components}, Regime clusters: {n_regimes}\n")
+        
+        logger.info(f"Starting advanced analysis of {symbol} on {timeframe} timeframe ({days} days)")
+        
+        # Create output directory based on symbol and date if not provided
+        if not output_dir:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            symbol_formatted = symbol.replace('/', '_')
+            output_dir = f"./analysis_results/{symbol_formatted}_{timeframe}_{timestamp}"
+            
+            # Create directory if it doesn't exist
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Created output directory: {output_dir}")
+        
+        with ErrorHandler(context=f"advanced analysis for {symbol}") as handler:
+            # 1. Fetch data - use from_date instead of days to get full historical data
+            logger.debug(f"Fetching market data for {symbol}")
+            from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            logger.info(f"Fetching data from {from_date} to present")
+            print(f"Fetching data from {from_date} to present")
+            
+            # Force refresh to avoid cache issues (use our fixed pagination)
+            market_data = self.data_connector.fetch_market_data(
+                symbol=symbol, 
+                timeframe=timeframe, 
+                from_date=from_date,
+                force_refresh=force_refresh  # Force refresh to avoid cache issues
+            )
+            
+            if market_data.empty:
+                error_msg = f"Could not fetch market data for {symbol}"
+                logger.error(error_msg)
+                print(f"Error: {error_msg}")
+                return 1
+            
+            logger.info(f"Retrieved {len(market_data)} candles from {market_data.index[0]} to {market_data.index[-1]}")
+            print(f"Retrieved {len(market_data)} candles from {market_data.index[0].strftime('%Y-%m-%d')} to {market_data.index[-1].strftime('%Y-%m-%d')}")
+            
+            # 2. Generate technical features directly (skip caching to avoid column mismatch)
+            logger.debug(f"Generating technical indicators for {symbol}")
+            
+            # Manually calculate indicators to avoid cache issues
+            df_indicators = self.technical_features._calculate_indicators(market_data)
+            
+            print(f"Generated technical indicators. Data shape: {df_indicators.shape}")
+            print(f"Indicators: {', '.join([col for col in df_indicators.columns if col not in ['open', 'high', 'low', 'close', 'volume']])}")
+            
+            # 3. Run advanced models (PCA and HMM)
+            logger.debug(f"Running advanced statistical models for {symbol}")
+            print("\nRunning PCA and market regime detection...")
+            
+            # Run all models
+            df_with_regimes, stats = run_models(
+                df=df_indicators,
+                output_dir=output_dir,
+                n_components=n_components,
+                n_regimes=n_regimes,
+                create_plots=True
+            )
+            
+            # Extract and display PCA results
+            pca_variance = stats['pca']['variance']['explained_variance_ratio']
+            pca_cumulative = stats['pca']['variance']['cumulative_explained_variance']
+            
+            print("\nPCA Results:")
+            print(f"Components: {n_components}")
+            for i, var in enumerate(pca_variance):
+                print(f"  PC{i+1} explains {var*100:.2f}% of variance")
+            print(f"  Total explained variance: {pca_cumulative[-1]*100:.2f}%")
+            
+            # Display current regime
+            current_kmeans_regime = df_with_regimes['kmeans_regime'].iloc[-1]
+            current_hmm_regime = df_with_regimes['hmm_regime'].iloc[-1]
+            
+            print("\nCurrent Market Regimes:")
+            print(f"  KMeans cluster: Regime {current_kmeans_regime}")
+            print(f"  HMM state: Regime {current_hmm_regime}")
+            
+            # Describe regimes
+            print("\nRegime Characteristics (KMeans):")
+            for regime, data in stats['kmeans_regimes'].items():
+                print(f"  Regime {regime}:")
+                print(f"    Frequency: {data['count']} days ({data['count']/len(df_with_regimes)*100:.1f}%)")
+                print(f"    Avg price: ${data['avg_close']:.2f}")
+                print(f"    Avg return: {data['avg_return']:.2f}%")
+                print(f"    Volatility: {data['volatility']:.2f}%")
+                print(f"    Win rate: {data['win_rate']:.1f}%")
+                print(f"    Avg duration: {data['avg_duration']:.1f} days")
+            
+            # Save important data to CSV
+            final_df = df_with_regimes[['open', 'high', 'low', 'close', 'volume', 
+                                      'PC1', 'PC2', 'kmeans_regime', 'hmm_regime']]
+            csv_path = f"{output_dir}/{symbol.replace('/', '_')}_{timeframe}_regimes.csv"
+            final_df.to_csv(csv_path)
+            
+            # Save stats as JSON
+            json_stats = {k: v for k, v in stats.items() if k != 'pca'}  # Skip PCA details in JSON (too complex)
+            json_path = f"{output_dir}/{symbol.replace('/', '_')}_{timeframe}_stats.json"
+            with open(json_path, 'w') as f:
+                json.dump(json_stats, f, indent=2, default=str)
+            
+            print(f"\nAnalysis complete. Results saved to {output_dir}")
+            print(f"CSV data: {csv_path}")
+            print(f"JSON stats: {json_path}")
+            
+            # 6. Generate market summary with LLM if available
+            if os.environ.get("LLM_API_KEY"):
+                logger.debug(f"Generating LLM market analysis for advanced models")
+                print("\nGenerating advanced analysis summary with LLM...")
+                
+                # Create a prompt for the LLM with advanced analysis results
+                prompt = f"""
+                Analyze the following market data and regime detection results for {symbol}:
+                
+                Current price: ${df_with_regimes['close'].iloc[-1]:.2f}
+                
+                PCA Results:
+                - {n_components} principal components explain {pca_cumulative[-1]*100:.2f}% of variance
+                
+                Current Market Regimes:
+                - KMeans cluster: Regime {current_kmeans_regime}
+                - HMM state: Regime {current_hmm_regime}
+                
+                Regime {current_kmeans_regime} characteristics:
+                - Frequency: {stats['kmeans_regimes'][current_kmeans_regime]['count']} days ({stats['kmeans_regimes'][current_kmeans_regime]['count']/len(df_with_regimes)*100:.1f}%)
+                - Avg return: {stats['kmeans_regimes'][current_kmeans_regime]['avg_return']:.2f}%
+                - Volatility: {stats['kmeans_regimes'][current_kmeans_regime]['volatility']:.2f}%
+                - Win rate: {stats['kmeans_regimes'][current_kmeans_regime]['win_rate']:.1f}%
+                
+                Provide a concise market analysis based on this information. Include interpretation of what these regimes typically indicate and potential scenarios that might unfold.
+                """
+                
+                summary = self.llm.analyze_with_llm(prompt)
+                logger.info(f"LLM advanced analysis generated for {symbol}")
+                print("\nLLM Analysis of Advanced Models:")
+                print(summary)
+            else:
+                logger.warning("LLM analysis skipped (no API key provided)")
+                print("\nLLM Analysis skipped (no API key provided)")
+            
+        logger.info(f"Advanced analysis of {symbol} completed successfully")
         return 0
     
     def list_symbols(self):
@@ -342,6 +491,16 @@ def main():
     analyze_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe")
     analyze_parser.add_argument("--days", "-d", type=int, default=365, help="Days of historical data")
     
+    # Advanced analysis command
+    advanced_parser = subparsers.add_parser("advanced", help="Run advanced statistical analysis (PCA, HMM)")
+    advanced_parser.add_argument("--symbol", "-s", default="BTC/USDT", help="Trading pair to analyze")
+    advanced_parser.add_argument("--timeframe", "-t", default="1d", help="Analysis timeframe") 
+    advanced_parser.add_argument("--days", "-d", type=int, default=500, help="Days of historical data")
+    advanced_parser.add_argument("--components", "-c", type=int, default=2, help="Number of PCA components")
+    advanced_parser.add_argument("--regimes", "-r", type=int, default=3, help="Number of market regimes")
+    advanced_parser.add_argument("--output", "-o", help="Output directory for analysis results")
+    advanced_parser.add_argument("--force-refresh", "-f", action="store_true", help="Force refresh data from API")
+    
     # List symbols command
     list_symbols_parser = subparsers.add_parser("symbols", help="List available trading pairs")
     
@@ -390,6 +549,16 @@ def main():
         # Execute the command
         if args.command == "analyze":
             return cli.analyze(args.symbol, args.timeframe, args.days)
+        elif args.command == "advanced":
+            return cli.analyze_advanced(
+                args.symbol, 
+                args.timeframe, 
+                args.days, 
+                args.output, 
+                args.components, 
+                args.regimes,
+                args.force_refresh
+            )
         elif args.command == "symbols":
             return cli.list_symbols()
         elif args.command == "timeframes":

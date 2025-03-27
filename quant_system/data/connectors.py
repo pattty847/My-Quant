@@ -283,12 +283,10 @@ class CryptoDataConnector:
                             timeframe_ms = self._timeframe_to_milliseconds(timeframe)
                             current_timestamp += timeframe_ms * 100  # Skip ahead 100 candles
                         
-                        # If we got fewer candles than expected, we might be at the end
-                        if len(ohlcvs) < 1000:  # Most exchanges return max 1000 candles per request
-                            logger.debug("Received fewer candles than expected, may have reached the end")
-                            # Only break if we actually got some candles, otherwise continue
-                            if len(ohlcvs) > 0:
-                                break
+                        # If we got 0 candles, we've likely reached the API limit or end of data
+                        if len(ohlcvs) == 0:
+                            logger.debug("Received zero candles, reached the end of available data")
+                            break
                     
                     except (ccxt.ExchangeError, ccxt.AuthenticationError,
                            ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as error:
