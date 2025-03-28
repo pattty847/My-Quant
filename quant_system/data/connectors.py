@@ -139,8 +139,10 @@ class CryptoDataConnector:
                 from_timestamp = self.exchange.parse8601(from_date)
                 if from_timestamp is None:
                     logger.error(f"Could not parse from_date: {from_date}")
+                    # Default to 1 year ago if parsing fails
                     from_timestamp = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
             elif isinstance(from_date, datetime):
+                # Default to 1 year ago if parsing fails
                 from_timestamp = int(from_date.timestamp() * 1000)
             else:
                 from_timestamp = from_date  # Assume it's already a timestamp
@@ -153,6 +155,7 @@ class CryptoDataConnector:
                 to_timestamp = self.exchange.parse8601(to_date)
                 if to_timestamp is None:
                     logger.error(f"Could not parse to_date: {to_date}")
+                    # Default to current timestamp if parsing fails
                     to_timestamp = int(datetime.now().timestamp() * 1000)
             elif isinstance(to_date, datetime):
                 to_timestamp = int(to_date.timestamp() * 1000)

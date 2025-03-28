@@ -39,7 +39,7 @@ class DimensionalityReducer:
         """Fit PCA model to data and transform data
         
         Args:
-            df: DataFrame with technical indicators
+            df: DataFrame of OHLCV data with technical indicators
             feature_columns: List of column names to use as features
             n_components: Number of principal components to extract
             create_plots: Whether to create and save PCA plots
